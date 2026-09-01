@@ -1,8 +1,9 @@
 # Registry of implementations NOT wired into rexbench
 
-Every entry below is a real, audited implementation somewhere in this repo tree that
-`rexbench` deliberately does not run. Kept documented, not deleted — the reasons these
-don't run are themselves a finding (see `/audit/AUDIT.md` for full detail and citations).
+Every entry below is a real, audited implementation that `rexbench` deliberately does not
+run. Kept documented, not deleted — the reasons these don't run are themselves a finding
+(see "AUDIT.md" — the prior reproducibility audit this pipeline was built from; that
+document lives outside this repository, referenced here by section for provenance).
 
 | Implementation | Reason not wired in | Audit reference |
 |---|---|---|
@@ -11,9 +12,9 @@ don't run are themselves a finding (see `/audit/AUDIT.md` for full detail and ci
 | `baselines/lod-personalized-recommender` | Ran cleanly, but only against the original authors' own demo dataset (hetrec2011-lastfm-2k) — every commit is authored by the upstream author; the researcher made zero commits and never adapted it to any project dataset. Reads as a literature-survey clone, not an active baseline. | AUDIT.md section 3 (baselines audit) |
 | `baselines/rep-path-reasoning-recsys` (CAFE, UCPR) | CAFE and UCPR only reached the TransE knowledge-graph-embedding pretraining stage (`pretrained/ml1m/{cafe,ucpr}/transe/`) — no ml100k pretrained directory exists for either, and neither was ever trained to a full policy/symbolic model or evaluated. The same directory's own PGPR copy (a third, independent vendored copy of PGPR) trained successfully but was never merged with the ETD/SEP/LIR-augmented PGPR pipeline that actually produced published results — superseded, not integrated. | AUDIT.md section 3 (baselines audit) |
 | `baselines/recoxplainer` | Byte-for-byte-diverged, stale duplicate of the real dependency. `git log` shows only clean upstream commits; the actively-patched fork with the memory/batching/NaN fixes rexbench actually needs lives at the top-level `recoxplainer/` (remote `luan`, uncommitted in-progress edits). Using this copy instead would silently reintroduce the NaN/batching bugs the top-level fork fixed. | AUDIT.md section 0 / 3 |
-| RecBole `ItemKNN` | Fully implemented and importable (`rexfair.rexfair.training.recbole.AVAILABLE_MODELS`), trained repeatedly in the predecessor project (7 checkpoints across 5 dates), but never evaluated in either the predecessor or `rexfair` — commented out of every explanation config with no explanatory comment anywhere in the repo. Not part of your Tier 2 list either (Popularity/BPR/MultiVAE/NeuMF/SLIM only). Left out of rexbench for the same reason it was already excluded, undocumented as that reason is. | AUDIT.md sections 1.1, 3.9 |
+| RecBole `ItemKNN` | Fully implemented and importable (`AVAILABLE_MODELS` in `models/recbole_adapter.py`, ported from the predecessor pipeline's training code), trained repeatedly in the predecessor project (7 checkpoints across 5 dates), but never evaluated in either the predecessor pipeline or rexbench — commented out of every explanation config with no explanatory comment anywhere in the repo. Not part of your Tier 2 list either (Popularity/BPR/MultiVAE/NeuMF/SLIM only). Left out of rexbench for the same reason it was already excluded, undocumented as that reason is. | AUDIT.md sections 1.1, 3.9 |
 | PGPR's ETD/SEP/LIR reranking variants (`ETDopt`, `LIRopt`, `SEPopt`, and their 4 combinations) | Beyond what Tier 1 asked for (base PGPR only). The chain that produced their published numbers is confirmed broken: `mesuaring-explainable-fairness/analysis/post_process_pgpr.ipynb` reads from `baselines/explanation-quality-recsys/paths_v5/` and `results_v5/`, and those directories no longer exist anywhere in the tree. Wiring these in would mean either accepting an unreproducible cached result or rebuilding the missing postprocessing step from scratch — scoped as future work, not attempted here. | AUDIT.md section 3.10 |
-| LIME / SHAP / item-similarity explainers (predecessor project) | Explored in `mesuaring-explainable-fairness/explanation/{lime,shap,item_similarity_based,post_hoc_similarity}.ipynb`, never carried into `rexfair`'s explanation layer, and not requested for this pipeline (only AR/KNN were asked for). | AUDIT.md section 3 (baselines audit) |
+| LIME / SHAP / item-similarity explainers (predecessor project) | Explored in `mesuaring-explainable-fairness/explanation/{lime,shap,item_similarity_based,post_hoc_similarity}.ipynb`, never carried into the predecessor pipeline's explanation layer, and not requested for this pipeline (only AR/KNN were asked for). | AUDIT.md section 3 (baselines audit) |
 | `RecBole-FairRec` / `Recbole-Debias` (predecessor project submodules) | Scaffolded (`.gitmodules` added) but never executed — no logs, no saved checkpoints in either submodule. Represent an alternative research direction (fix unfairness at training time) the project pivoted away from in favor of the current post-hoc-measurement approach `rexbench` implements. | AUDIT.md section 3 (baselines audit) |
 
 ## Datasets PGPR cannot currently run on
@@ -37,3 +38,13 @@ mapping (`user_mappings.txt`) — is real, scoped follow-up work, not done in th
 This means PGPR is the one model in this pipeline not guaranteed to share the exact same
 train/test rows as every other model on ml100k/ml1m — flag this explicitly in any
 cross-model comparison table.
+
+## Known gap: PGPR's KG relation data has no verified canonical download source
+
+`data/raw/pgpr_kg/{ml100k,ml1m}/` (entity/relation files, `kg_final.txt`, `e_map.txt`,
+`r_map.txt`, `train.txt`/`test.txt`) is a research-paper-specific derived artifact, not a
+standard dataset release — it isn't tracked in the `explanation-quality-recsys` fork's git
+history either (confirmed untracked there). `rexbench data fetch` documents manual placement
+for it rather than a download URL, since no stable, verified external host was found for this
+exact derived data. If you have (or know) a canonical source for it, add it to
+`src/rexbench/data_fetch.py`'s registry.

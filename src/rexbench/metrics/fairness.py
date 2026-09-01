@@ -1,12 +1,12 @@
 """Recommendation-side fairness metrics.
 
-variance() and entropy() are ported verbatim from rexfair.rexfair.evaluation.metrics —
-AUDIT.md 1.3/4.9 found these formulas correct (variance is O(n^2) pairwise, not textbook
-variance, by original design; entropy is not normalized by max entropy, also by original
-design — both preserved exactly).
+variance() and entropy() are ported verbatim from the predecessor pipeline's evaluation
+code — AUDIT.md 1.3/4.9 found these formulas correct (variance is O(n^2) pairwise, not
+textbook variance, by original design; entropy is not normalized by max entropy, also by
+original design — both preserved exactly).
 
-gini() is FIXED per AUDIT.md section 5.4. The original (rexfair/rexfair/evaluation/
-metrics.py:784-805) collapsed three distinct degenerate cases into a single out-of-range
+gini() is FIXED per AUDIT.md section 5.4. The original (in the predecessor pipeline's
+evaluation code) collapsed three distinct degenerate cases into a single out-of-range
 -1.0 sentinel:
     if denominator == 0 or numerator == 0:
         return -1.0

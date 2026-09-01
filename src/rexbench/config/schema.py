@@ -102,7 +102,7 @@ class ExplainerConfig(Frozen):
 
 
 class MetricsConfig(Frozen):
-    # accuracy/fairness operate on recommendation lists (rexfair.evaluation.metrics'
+    # accuracy/fairness operate on recommendation lists (the predecessor pipeline's
     # compute_metrics groups NDCG/MAP/Variance/Gini/Entropy/ARP together — AUDIT.md 1.3).
     # `explanation_arp` is a distinct metric (mean popularity of items inside *explanation*
     # sets, not recommendation lists) — kept separate from `arp` to avoid the ambiguity the

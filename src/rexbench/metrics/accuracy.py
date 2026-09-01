@@ -1,7 +1,7 @@
 """Recommendation accuracy and popularity-bias metrics.
 
-Ported verbatim from rexfair.rexfair.evaluation.metrics (AUDIT.md 1.3 found these formulas
-correct — only gini() needed a fix, handled separately in fairness.py). Column parameters
+Ported verbatim from the predecessor pipeline's evaluation code (AUDIT.md 1.3 found these
+formulas correct — only gini() needed a fix, handled separately in fairness.py). Column parameters
 are pinned to rexbench's canonical DatasetBundle column names instead of being passed in by
 callers, since every predictions_df/rel_dict in rexbench always uses the same schema.
 """
@@ -50,7 +50,7 @@ def _topk_per_user(predictions_df: pd.DataFrame, uid, top_k: int, groups) -> lis
 
 def dataset_ndcg_k(predictions_df: pd.DataFrame, user_test_dict: Dict, top_k: int = 10) -> Dict:
     """Per-user NDCG@k. Users whose top-k list has fewer than top_k entries are skipped
-    (matches rexfair's original behavior — flagged in AUDIT.md as silently shrinking the
+    (matches the predecessor pipeline's original behavior — flagged in AUDIT.md as silently shrinking the
     evaluated population on sparse data/models, preserved here rather than changed)."""
     groups = predictions_df.groupby(U_COL)
     out: Dict = {}

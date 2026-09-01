@@ -1,9 +1,9 @@
 """Item-based kNN post-hoc explainer.
 
-rexfair.rexfair.explanation.explainers.post_hoc_knn is a two-line wrapper around
+The predecessor pipeline's post_hoc_knn wrapper is a two-line call to
 recoxplainer.explain.KNNPostHocExplainer that does not expose its `knn` parameter, so this
 adapter calls KNNPostHocExplainer directly (the actual explainer class, unmodified) to make
-`knn` config-driven, mirroring post_hoc_knn's own call pattern exactly.
+`knn` config-driven, mirroring that wrapper's own call pattern exactly.
 """
 from __future__ import annotations
 

@@ -1,12 +1,13 @@
-"""Explanation-quality metrics, ported verbatim from rexfair.rexfair.evaluation.metrics
-(AUDIT.md 1.3 found these formulas correct).
+"""Explanation-quality metrics, ported verbatim from the predecessor pipeline's evaluation
+code (AUDIT.md 1.3 found these formulas correct).
 
 Expects an explanations DataFrame with a real Python ``set`` per row in the
 ``explanation_set`` column (built directly by explainers/*.py in memory) plus
-``tail_count``/``exp_count`` columns from ``annotate_tail_counts`` — this replaces
-rexfair's original ``read_explanation_csv`` CSV round-trip (which parsed set literals with
-``ast.literal_eval``); the metric formulas themselves are unchanged, only the I/O path that
-used to go through a headerless CSV is gone since rexbench builds these DataFrames in memory.
+``tail_count``/``exp_count`` columns from ``annotate_tail_counts`` — this replaces the
+predecessor pipeline's original ``read_explanation_csv`` CSV round-trip (which parsed set
+literals with ``ast.literal_eval``); the metric formulas themselves are unchanged, only the
+I/O path that used to go through a headerless CSV is gone since rexbench builds these
+DataFrames in memory.
 """
 from __future__ import annotations
 

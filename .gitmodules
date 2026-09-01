@@ -1,0 +1,9 @@
+[submodule "external/recoxplainer"]
+	path = external/recoxplainer
+	url = https://github.com/luanssouza/recoxplainer.git
+[submodule "external/ebpr"]
+	path = external/ebpr
+	url = https://github.com/luanssouza/EBPR.git
+[submodule "external/explanation-quality-recsys"]
+	path = external/explanation-quality-recsys
+	url = https://github.com/luanssouza/explanation-quality-recsys.git

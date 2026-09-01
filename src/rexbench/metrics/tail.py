@@ -1,6 +1,6 @@
 """Single source of truth for the tail-item set.
 
-Ported from rexfair.rexfair.evaluation.metrics.compute_tail_items (AUDIT.md section 1.3 /
+Ported from the predecessor pipeline's compute_tail_items (AUDIT.md section 1.3 /
 4.5 found this implementation correct — same formula, only the column parameter is now a
 name instead of a positional index since DatasetBundle always uses named columns).
 Computed exactly once per dataset in core/dataset.py::build_dataset_bundle and threaded

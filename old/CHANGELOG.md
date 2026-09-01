@@ -116,7 +116,7 @@ group from its output.
 
 **Why**: torch >=2.6 changed `torch.load`'s default `weights_only` to `True`, which rejects
 checkpoints containing non-tensor Python objects (this policy checkpoint does). Same fix
-already present, for the same reason, in `rexfair/rexfair/explanation/explainers.py:71-76`.
+already present, for the same reason, in the predecessor pipeline's explanation module.
 No numeric/behavioral change — only which torch versions can load the file.
 
 ## 3. `baselines/explanation-quality-recsys/models/PGPR/train_transe_model.py`

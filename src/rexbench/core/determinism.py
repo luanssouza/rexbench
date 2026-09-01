@@ -105,7 +105,7 @@ DISCLOSED_CORRECTIONS = [
                    "never reached by this pipeline's fit() call sequence)",
         "change": "weights_only=False added explicitly (torch>=2.6 changed that default, "
                    "which would otherwise break loading these non-tensor state dicts; same "
-                   "pattern already used in rexfair/rexfair/explanation/explainers.py)",
+                   "pattern already used in the predecessor pipeline's explanation module)",
         "reference": "rexbench plan, environment-unification feasibility check",
     },
 ]

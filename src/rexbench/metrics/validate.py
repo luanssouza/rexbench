@@ -1,6 +1,6 @@
 """Range validation for metric outputs.
 
-AUDIT.md section 5 found rexfair's gini() silently returning -1.0 (outside its documented
+AUDIT.md section 5 found the predecessor pipeline's gini() silently returning -1.0 (outside its documented
 [0,1] range) straight into a results CSV and a LaTeX table. @validated_range makes that
 class of bug impossible to ship silently: an out-of-range, non-NaN return raises
 MetricRangeError, which core/runner.py catches and records as a first-class `degenerate`

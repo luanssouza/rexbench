@@ -1,12 +1,11 @@
 """Dataset loading, canonical ID remapping, and the once-per-dataset precomputation
 (tail items, popularity, interaction stats) that every model/metric reuses.
 
-Reuses rexfair's own loaders (rexfair.rexfair.data.loaders) and split functions
-(rexfair.rexfair.preprocessing.splits) for every dataset that already has one —
-AUDIT.md found those implementations correct. Two loaders (rentrunway, amazon_digital_music)
-are new: AUDIT.md found no loader for either anywhere in the codebase (the "amazon" dataset's
-raw source was untraceable at audit time; confirmed with the user to be Amazon Digital Music
-going forward, see the plan's Context section).
+Loaders for ml100k/ml1m/lastfm1k/ambar/coat/electronics are ported from the predecessor
+pipeline's data-loading code (AUDIT.md found those implementations correct, reused
+verbatim). Two loaders (rentrunway, amazon_digital_music) are new: AUDIT.md found no loader
+for either anywhere in the codebase (the "amazon" dataset's raw source was untraceable at
+audit time; confirmed with the user to be Amazon Digital Music going forward).
 """
 from __future__ import annotations
 
@@ -16,15 +15,61 @@ from typing import Literal
 
 import pandas as pd
 
-import rexbench.vendor  # noqa: F401  (installs sys.path shims before the rexfair import below)
-from rexfair.data import loaders as rexfair_loaders
-from rexfair.preprocessing.splits import random_split as _random_split
-from rexfair.preprocessing.splits import temporal_split as _temporal_split
-
 from rexbench.config.schema import DatasetConfig
+from rexbench.core.splits import random_split as _random_split
+from rexbench.core.splits import temporal_split as _temporal_split
 from rexbench.metrics.tail import compute_tail_items
 
 CANONICAL_COLUMNS = ["user_id", "item_id", "rating", "timestamp"]
+
+
+def _load_ml100k(path: str) -> pd.DataFrame:
+    df = pd.read_csv(path, sep="\t", header=None)
+    df.columns = ["user_id", "item_id", "rating", "timestamp"]
+    return df
+
+
+def _load_ml1m(path: str) -> pd.DataFrame:
+    df = pd.read_csv(path, sep="::", engine="python", header=None)
+    df.columns = ["user_id", "item_id", "rating", "timestamp"]
+    return df
+
+
+def _load_lastfm1k(path: str) -> pd.DataFrame:
+    df = pd.read_csv(path, sep="\t", on_bad_lines="skip", header=None)
+    df = df[[0, 4, 1]]
+    df.columns = ["user_id", "item_id", "timestamp"]
+    df.dropna(inplace=True)
+    return df
+
+
+def _load_ambar(path: str) -> pd.DataFrame:
+    df = pd.read_csv(path)
+    df.columns = ["user_id", "item_id", "rating"]
+    return df
+
+
+def _coat_interactions(df: pd.DataFrame) -> pd.DataFrame:
+    interactions = []
+    for u, r in df.iterrows():
+        ratings = r[0].split()
+        for i, val in enumerate(ratings):
+            if val != "0":
+                interactions.append({"user_id": u, "item_id": i, "rating": int(val)})
+    return pd.DataFrame(interactions)
+
+
+def _load_coat(train_path: str, test_path: str) -> pd.DataFrame:
+    train_df = _coat_interactions(pd.read_csv(train_path, header=None))
+    test_df = _coat_interactions(pd.read_csv(test_path, header=None))
+    return pd.concat([train_df, test_df]).sort_values("user_id").reset_index(drop=True)
+
+
+def _load_electronics(path: str) -> pd.DataFrame:
+    """Drops rows with missing user attributes — a MarketBias-specific debiasing filter."""
+    df = pd.read_csv(path)
+    df = df.dropna(subset=["user_attr"])
+    return df[["item_id", "user_id", "rating", "timestamp"]]
 
 
 def _load_rentrunway(path: str) -> pd.DataFrame:
@@ -42,7 +87,7 @@ def _load_rentrunway(path: str) -> pd.DataFrame:
 
 def _load_amazon_digital_music(path: str) -> pd.DataFrame:
     """New loader for datasets/Amazon/Digital_Music.jsonl — confirmed with the user as the
-    true source of rexfair's "amazon" dataset (see plan Context)."""
+    true source of the predecessor pipeline's "amazon" dataset."""
     df = pd.read_json(path, lines=True)
     df = df.rename(columns={"asin": "item_id"})
     df["timestamp"] = (df["timestamp"] // 1000).astype("int64")  # ms -> s
@@ -50,12 +95,12 @@ def _load_amazon_digital_music(path: str) -> pd.DataFrame:
 
 
 _LOADERS = {
-    "ml100k": lambda raw: rexfair_loaders.load_ml100k(raw),
-    "ml1m": lambda raw: rexfair_loaders.load_ml1m(raw),
-    "lastfm1k": lambda raw: rexfair_loaders.load_lastfm1k(raw),
-    "ambar": lambda raw: rexfair_loaders.load_ambar(raw),
-    "coat": lambda raw: rexfair_loaders.load_coat(raw["train"], raw["test"]),
-    "electronics": lambda raw: rexfair_loaders.load_electronics(raw),
+    "ml100k": _load_ml100k,
+    "ml1m": _load_ml1m,
+    "lastfm1k": _load_lastfm1k,
+    "ambar": _load_ambar,
+    "coat": lambda raw: _load_coat(raw["train"], raw["test"]),
+    "electronics": _load_electronics,
     "rentrunway": _load_rentrunway,
     "amazon_digital_music": _load_amazon_digital_music,
 }

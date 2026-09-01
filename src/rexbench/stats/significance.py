@@ -1,6 +1,6 @@
 """Friedman, Quade, Nemenyi post-hoc, Kendall's W, and the critical-difference value.
 
-friedman_test mirrors rexfair.rexfair.evaluation.statistics.friedman_test (AUDIT.md found it
+friedman_test mirrors the predecessor pipeline's friedman_test (AUDIT.md found it
 correct: pivot by model x dataset, scipy.stats.friedmanchisquare, alpha=0.05). quade_test,
 critical_difference, and nemenyi_pairwise_pvalues are ported verbatim from
 notebooks/results_analysis.ipynb (AUDIT.md 1.4/OUTPUT: these existed only as ad hoc

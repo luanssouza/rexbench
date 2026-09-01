@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "rexbench"
 version = "0.1.0"
-description = "Config-driven reproduction pipeline for explainable-fairness RecSys experiments (see /audit/AUDIT.md)"
+description = "Config-driven reproduction pipeline for explainable-fairness RecSys experiments"
 requires-python = ">=3.10"
 dependencies = [
     # Shared environment feasibility is documented in README.md#environment.
@@ -25,8 +25,8 @@ dependencies = [
     "easydict>=1.9",
     "tqdm>=4.60",
     "scikit-posthocs>=0.7",
-    # recoxplainer: install from ../recoxplainer (the actively-patched fork, per AUDIT.md
-    # section 0 — NOT ../baselines/recoxplainer, which is a stale, unpatched duplicate).
+    # recoxplainer: install separately from external/recoxplainer (the actively-patched
+    # fork, added as a git submodule) — see README.md#environment.
 ]
 
 [project.scripts]
