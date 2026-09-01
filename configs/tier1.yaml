@@ -1,0 +1,143 @@
+# Tier 1 (required): EBPR family (BPR/EBPR/UBPR/UEBPR) on every dataset, PGPR on the two
+# datasets that currently have a pre-linked knowledge graph (AUDIT.md's PGPR KG table).
+# Run from the repo root (measuring/): `rexbench run --config rexbench/configs/tier1.yaml`
+
+experiment:
+  name: tier1
+  output_dir: rexbench/outputs
+
+determinism:
+  seeds: [2020, 42, 7]
+  reproducibility: true
+  device: auto
+
+datasets:
+  - name: ml100k
+    loader: ml100k
+    raw_path: datasets/ML100K/ml-100k/u.data
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200}
+    topk: [5, 10]
+    tail_fraction: 0.20
+    kg: {status: available, source_dir: baselines/explanation-quality-recsys/datasets/ml100k}
+
+  - name: ml1m
+    loader: ml1m
+    raw_path: datasets/ML1M/ml-1m/ratings.dat
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200}
+    topk: [5, 10]
+    tail_fraction: 0.20
+    kg: {status: available, source_dir: baselines/explanation-quality-recsys/datasets/ml1m}
+
+  - name: coat
+    loader: coat
+    raw_path: {train: datasets/Coat/train.ascii, test: datasets/Coat/test.ascii}
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200}
+    topk: [5, 10]
+    tail_fraction: 0.20
+    kg: {status: needs_construction}  # item_features_map.txt has gender/jackettype/color, no extractor yet
+
+  - name: electronics
+    loader: electronics
+    raw_path: datasets/MarketBias/df_electronics.csv
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200}
+    topk: [5, 10]
+    tail_fraction: 0.20
+    kg: {status: needs_construction}  # category/brand/model_attr present, no extractor yet
+
+  - name: rentrunway
+    loader: rentrunway
+    raw_path: datasets/Clothes/renttherunway_final_data.json
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200}
+    topk: [5, 10]
+    tail_fraction: 0.20
+    kg: {status: needs_construction}  # category/fit/size present, no extractor yet
+
+  - name: ambar
+    loader: ambar
+    raw_path: datasets/AMBAR/data/AMBAR/ratings_info.csv
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200}
+    topk: [5, 10]
+    tail_fraction: 0.20
+    kg: {status: needs_construction}  # separate artists_info.csv/tracks_info.csv entity tables, no extractor yet
+
+  - name: lastfm1k
+    loader: lastfm1k
+    raw_path: datasets/LastFM1K/lastfm-dataset-1K/userid-timestamp-artid-artname-traid-traname.tsv
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200}
+    topk: [5, 10]
+    tail_fraction: 0.20
+    kg: {status: needs_construction}  # PGPR's utils.py already defines a LASTFM_KG_RELATION schema, but no KG data files exist yet
+
+  - name: amazon_digital_music
+    loader: amazon_digital_music
+    raw_path: datasets/Amazon/Digital_Music.jsonl
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200}
+    topk: [5, 10]
+    tail_fraction: 0.20
+    kg: {status: unsupported}  # review text/ratings only, no structured entity fields
+
+models:
+  - name: EBPR
+    tier: 1
+    adapter: ebpr
+    variant: EBPR
+    applies_to: all_datasets
+    hyperparameters:
+      num_epoch: 50
+      batch_size: 512
+      lr: 0.001
+      num_latent: 8
+      neighborhood: 20
+      optimizer: adam
+    precondition: {min_fraction_users_with_2plus: 0.5}
+
+  - name: UBPR
+    tier: 1
+    adapter: ebpr
+    variant: UBPR
+    applies_to: all_datasets
+    hyperparameters:
+      num_epoch: 50
+      batch_size: 512
+      lr: 0.001
+      num_latent: 8
+      neighborhood: 20
+      optimizer: adam
+    precondition: {min_fraction_users_with_2plus: 0.5}
+
+  - name: UEBPR
+    tier: 1
+    adapter: ebpr
+    variant: UEBPR
+    applies_to: all_datasets
+    hyperparameters:
+      num_epoch: 50
+      batch_size: 512
+      lr: 0.001
+      num_latent: 8
+      neighborhood: 20
+      optimizer: adam
+    precondition: {min_fraction_users_with_2plus: 0.5}
+
+  # PGPR: applies_to restricted to the datasets with an available pre-linked KG.
+  # See REGISTRY.md for why the other 6 datasets aren't listed here yet.
+  - name: PGPR
+    tier: 1
+    adapter: pgpr
+    applies_to: [ml100k, ml1m]
+    hyperparameters:
+      transe_epochs: 30
+      transe_batch_size: 64
+      agent_epochs: 50
+      agent_batch_size: 32
+    precondition: {min_kg_triples: 1000}
+
+explainers: []
+
+metrics:
+  accuracy: [ndcg, map]
+  fairness: [gini, variance, entropy, arp, arp_normalized, tail_coverage]
+
+statistics:
+  tests: [friedman, quade, nemenyi, kendall_w]
+  alpha: 0.05

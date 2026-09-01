@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rexbench"
+version = "0.1.0"
+description = "Config-driven reproduction pipeline for explainable-fairness RecSys experiments (see /audit/AUDIT.md)"
+requires-python = ">=3.10"
+dependencies = [
+    # Shared environment feasibility is documented in README.md#environment.
+    # Versions below are the merged, verified-compatible set for RecBole + EBPR + PGPR
+    # in one interpreter (see README.md for the two vendored-source compatibility patches
+    # this depends on).
+    "numpy>=1.21,<2.0",
+    "pandas>=1.5",
+    "scipy>=1.10",
+    "torch>=2.0",
+    "recbole>=1.2",
+    "scikit-learn>=1.0",
+    "mlxtend<0.23",
+    "pydantic>=2.0",
+    "pyarrow>=14",
+    "pyyaml>=6.0",
+    "easydict>=1.9",
+    "tqdm>=4.60",
+    "scikit-posthocs>=0.7",
+    # recoxplainer: install from ../recoxplainer (the actively-patched fork, per AUDIT.md
+    # section 0 — NOT ../baselines/recoxplainer, which is a stale, unpatched duplicate).
+]
+
+[project.scripts]
+rexbench = "rexbench.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["rexbench*"]
