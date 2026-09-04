@@ -76,7 +76,7 @@ class PGPRModelAdapter(ModelAdapter):
         self._policy_file: Path | None = None
 
     def check_preconditions(self, dataset: DatasetBundle) -> PreconditionReport:
-        min_triples = self.config.precondition.min_kg_triples or 1
+        min_triples = self.config.precondition_for(dataset.name).min_kg_triples or 1
         if dataset.kg_status != "available":
             return PreconditionReport(
                 satisfied=False,
@@ -110,7 +110,7 @@ class PGPRModelAdapter(ModelAdapter):
         if name not in DATASET_DIR:
             raise KeyError(f"PGPR has no dataset registry entry for {name!r}")
         self._dataset_name = name
-        hp = self.config.hyperparameters
+        hp = self.config.hyperparameters_for(name)
 
         with _chdir(PGPR_ROOT):
             # train_ml100k.sh (the script that produced AUDIT.md's confirmed successful

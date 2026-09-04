@@ -75,6 +75,12 @@ Not committed to this repository (several are 75MB–2.4GB, most carry their own
 terms). See [`data/README.md`](data/README.md) for exactly what to download, from where, and
 where to place it under `data/raw/`.
 
+## Running on Lightning AI
+
+No local GPU needed — see [`LIGHTNING_AI.md`](LIGHTNING_AI.md) for step-by-step setup and
+two things worth knowing before you start (EBPR's co-occurrence matrix is CPU-RAM-bound, not
+GPU-bound; PGPR's knowledge-graph data still has no verified download source).
+
 ## Disclosed corrections to vendored source
 
 Every run's `manifest.json` records these under `disclosed_corrections`. Applied directly to
