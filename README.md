@@ -38,9 +38,12 @@ each adapter module's docstring for exactly what's reused verbatim vs. adapted.
 
 ## Dependency layout
 
-- **`external/`** — git submodules, each pinned to a specific commit on your own fork:
-  `recoxplainer`, `ebpr` (EBPR/UBPR/UEBPR/BPR), `explanation-quality-recsys` (PGPR). See
-  `.gitmodules`.
+- **`external/`** — git submodules, each pinned to a specific commit on the correct branch of
+  your own fork: `recoxplainer` (`master`, `ef17844`), `ebpr` (`reproducibility`, `a627034`,
+  EBPR/UBPR/UEBPR/BPR), `explanation-quality-recsys` (`reproducibility`, `c250354`, PGPR). The
+  branch is recorded in `.gitmodules` (`submodule.<name>.branch`) so `git submodule update
+  --remote` tracks the right branch if you ever want to move the pin forward — run
+  `git submodule status` to check what's currently checked out.
 - **RecBole** — a normal pinned pip dependency (`recbole>=1.2` in `pyproject.toml`), the
   same as torch/numpy/pandas. Not vendored — it's a standard, unmodified open-source
   package with stable PyPI releases.
@@ -82,9 +85,12 @@ after verifying each against the actually-executed code path (`main.py`'s import
 1. **`data_utils.py` rating/timestamp parsing** — both fields were gated on
    `dataset_name == "ml1m"`, hardcoding rating=0 and a nonsensical timestamp for every other
    dataset. Verified ml100k's review file has the identical 4-field layout as ml1m (both
-   values genuinely present at the same positions) — a real bug, not a format difference.
-   Fixed to parse both fields unconditionally. (AUDIT.md section 3.1, approved before
-   applying.)
+   values genuinely present at the same positions) — a real bug, not a format difference for
+   that pair. Fixed to parse both fields unconditionally for ml1m/ml100k; the committed fix
+   (`external/explanation-quality-recsys` commit `c250354`) keeps a `dataset_name == "lastfm"`
+   special case for rating/timestamp position, reflecting that lastfm's review file genuinely
+   has a different layout — see that commit for the exact current logic, it was refined after
+   my original proposal. (AUDIT.md section 3.1, approved before applying.)
 2. **`test_agent.py` gender-fairness breakdown** — was commented-out dead code that still
    printed `nan`/`noOfUser=0`; re-enabled against variables already computed but unused.
    (AUDIT.md section 3.2, approved before applying.)
@@ -95,11 +101,15 @@ after verifying each against the actually-executed code path (`main.py`'s import
    reached by this pipeline — see `core/determinism.py`'s `DISCLOSED_CORRECTIONS` for the
    full, corrected accounting.
 
-**Status**: these 3 fixes are currently staged, not yet committed, in the local
-`explanation-quality-recsys` checkout — see `old/CHANGELOG.md` for the full diff and
-reasoning. They need to be committed and pushed to your fork before the
-`explanation-quality-recsys` submodule can be pinned to a commit that includes them; until
-then the submodule points at the pre-fix commit.
+**Status**: committed and pushed to your fork (`external/explanation-quality-recsys`,
+branch `reproducibility`, commit `c250354`) — the submodule is pinned there. See
+`old/CHANGELOG.md` for the diff of what this pipeline originally proposed.
+
+**Also see REGISTRY.md's "Correctness finding" section** — two additional, more serious bugs
+(a debug `break` truncating every EBPR training epoch to one batch; a hardcoded `10.999` stub
+standing in for MAP@K) were found in the `ebpr` submodule while pinning it to the correct
+branch, plus a related bug in this pipeline's own `EBPRModelAdapter` default — all three now
+addressed (pin updated / adapter default fixed), documented there in full.
 
 ## Known scope limitations
 
@@ -133,12 +143,35 @@ Run without the merged environment installed:
 ```bash
 PYTHONPATH=src python3 -m pytest tests/test_config_schema.py tests/test_metrics_validate.py tests/test_dataset_bundle.py -v
 ```
-16/16 passing — covers the config schema (including both real configs), the dataset/split/
-tail-item logic (now dependency-free after absorbing the predecessor pipeline's loaders —
-`core/dataset.py` no longer needs RecBole just to import), and, most importantly, the Gini
-fix (AUDIT.md section 5) against the exact degenerate inputs traced there: all-zero scores
-and a single-user dict now return `NaN`, all-equal-nonzero scores return `0.0`, and the
-normal case is unchanged.
+20/20 passing — covers the config schema (including both real configs, and the per-dataset
+`dataset_overrides` mechanism below), the dataset/split/tail-item logic (now dependency-free
+after absorbing the predecessor pipeline's loaders — `core/dataset.py` no longer needs
+RecBole just to import), and, most importantly, the Gini fix (AUDIT.md section 5) against
+the exact degenerate inputs traced there: all-zero scores and a single-user dict now return
+`NaN`, all-equal-nonzero scores return `0.0`, and the normal case is unchanged.
+
+Also confirmed empirically (loading every dataset's real raw data with rexbench's own
+loaders, no torch needed for this part): `amazon_digital_music` crashed on every load
+(`pd.read_json`'s `convert_dates=True` default silently turned the `timestamp` column into
+a datetime, breaking a later integer division) and `electronics`'s timestamp was a raw ISO
+date string instead of a numeric epoch (harmless for EBPR, but would have broken
+`RecBoleModelAdapter`'s `.inter` export). Both fixed in `core/dataset.py`.
+
+## Per-dataset overrides (EBPR on sparse datasets)
+
+`electronics`, `rentrunway`, and `amazon_digital_music` are far sparser than the other 5
+datasets (79.6% / 68.0% / 87.3% of users have fewer than 2 interactions, measured directly
+from the raw data) — too sparse for EBPR's default precondition
+(`min_fraction_users_with_2plus: 0.5`), which exists because `create_explainability_matrix`/
+`create_neighborhood`'s cosine-similarity item neighborhoods need real co-occurrence to mean
+anything. `ModelConfig.dataset_overrides` (see `configs/tier1.yaml`/`full.yaml`'s EBPR entry)
+lets a model declare a different `hyperparameters`/`precondition` block for specific
+datasets, without duplicating the model under a second name — both configs now set a lower
+sparsity floor (`0.05`) and a smaller item neighborhood (`5`, down from `20`) for those three
+datasets, so EBPR/UBPR/UEBPR actually attempt training there instead of being skipped. The
+expected outcome is a real but weak/degenerate explainability signal — the same class of
+disclosed finding as the AR explainer's `model_fidelity=0.0` on these same three datasets —
+not a crash.
 
 `tests/test_precondition_checks.py` needs torch (`EBPRModelAdapter.recommend()` does real
 tensor math) — it was not executable in the session this pipeline was built in (no merged

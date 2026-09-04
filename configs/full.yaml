@@ -78,6 +78,15 @@ datasets:
     kg: {status: unsupported}
 
 models:
+  # electronics/rentrunway/amazon_digital_music are far too sparse for the default
+  # precondition (79.6% / 68.0% / 87.3% of users have <2 interactions). Rather than skip
+  # them, this override lets EBPR/UBPR/UEBPR actually attempt training there: a much lower
+  # sparsity floor (0.05 — all three clear it) plus a smaller item neighborhood (5, down
+  # from 20) so create_neighborhood's cosine-similarity signal isn't diluted by
+  # mostly-empty co-occurrence on this data. Expected to produce a real but weak/degenerate
+  # explainability signal, not a crash — same class of disclosed finding as the AR
+  # explainer's model_fidelity=0.0 on these same three datasets. Defined once and aliased
+  # below so EBPR/UBPR/UEBPR share the exact same override.
   - name: EBPR
     tier: 1
     adapter: ebpr
@@ -85,6 +94,16 @@ models:
     applies_to: all_datasets
     hyperparameters: {num_epoch: 50, batch_size: 512, lr: 0.001, num_latent: 8, neighborhood: 20, optimizer: adam}
     precondition: {min_fraction_users_with_2plus: 0.5}
+    dataset_overrides: &sparse_ebpr_overrides
+      electronics:
+        hyperparameters: {num_epoch: 50, batch_size: 512, lr: 0.001, num_latent: 8, neighborhood: 5, optimizer: adam}
+        precondition: {min_fraction_users_with_2plus: 0.05}
+      rentrunway:
+        hyperparameters: {num_epoch: 50, batch_size: 512, lr: 0.001, num_latent: 8, neighborhood: 5, optimizer: adam}
+        precondition: {min_fraction_users_with_2plus: 0.05}
+      amazon_digital_music:
+        hyperparameters: {num_epoch: 50, batch_size: 512, lr: 0.001, num_latent: 8, neighborhood: 5, optimizer: adam}
+        precondition: {min_fraction_users_with_2plus: 0.05}
 
   - name: UBPR
     tier: 1
@@ -93,6 +112,7 @@ models:
     applies_to: all_datasets
     hyperparameters: {num_epoch: 50, batch_size: 512, lr: 0.001, num_latent: 8, neighborhood: 20, optimizer: adam}
     precondition: {min_fraction_users_with_2plus: 0.5}
+    dataset_overrides: *sparse_ebpr_overrides
 
   - name: UEBPR
     tier: 1
@@ -101,6 +121,7 @@ models:
     applies_to: all_datasets
     hyperparameters: {num_epoch: 50, batch_size: 512, lr: 0.001, num_latent: 8, neighborhood: 20, optimizer: adam}
     precondition: {min_fraction_users_with_2plus: 0.5}
+    dataset_overrides: *sparse_ebpr_overrides
 
   - name: PGPR
     tier: 1

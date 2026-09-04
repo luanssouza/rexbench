@@ -118,15 +118,15 @@ class PGPRModelAdapter(ModelAdapter):
             # DATASET_DIR['./datasets/<name>'] resolves relative to models/PGPR/. The KG
             # relation data isn't code (it doesn't live in the explanation-quality-recsys
             # submodule — see REGISTRY.md's "no verified canonical download source" note),
-            # so it's fetched separately by `rexbench data fetch` into data/raw/pgpr_kg/ and
-            # symlinked in here; no submodule source file touched.
+            # so it's placed manually per data/README.md at data/raw/pgpr_kg/ and symlinked
+            # in here; no submodule source file touched.
             local_datasets = Path("datasets")
             if not local_datasets.exists():
                 pgpr_kg_dir = REPO_ROOT / "data" / "raw" / "pgpr_kg"
                 if not pgpr_kg_dir.exists():
                     raise FileNotFoundError(
-                        f"{pgpr_kg_dir} not found — run `rexbench data fetch --dataset pgpr_kg` "
-                        f"(or see data/README.md) before training PGPR on {name!r}"
+                        f"{pgpr_kg_dir} not found — see data/README.md for how to obtain "
+                        f"PGPR's knowledge-graph data before training on {name!r}"
                     )
                 local_datasets.symlink_to(pgpr_kg_dir)
 

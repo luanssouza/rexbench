@@ -72,6 +72,17 @@ class PreconditionConfig(Frozen):
     min_kg_triples: int | None = None
 
 
+class DatasetOverride(Frozen):
+    """Per-(model, dataset) override — e.g. a lower EBPR sparsity precondition and a
+    smaller neighborhood specifically for known-sparse datasets, without duplicating the
+    model under a second name (which would split one model's results across two rows in
+    results.parquet). Unset fields fall back to the model's own top-level value; set fields
+    replace it entirely (hyperparameters replaces the whole dict, not a per-key merge —
+    keeps "what ran with what config" unambiguous from the override block alone)."""
+    hyperparameters: dict | None = None
+    precondition: PreconditionConfig | None = None
+
+
 class ModelConfig(Frozen):
     name: str
     tier: Literal[1, 2]
@@ -81,9 +92,22 @@ class ModelConfig(Frozen):
     applies_to: Literal["all_datasets"] | list[str] = "all_datasets"
     hyperparameters: dict = Field(default_factory=dict)
     precondition: PreconditionConfig = PreconditionConfig()
+    dataset_overrides: dict[str, DatasetOverride] = Field(default_factory=dict)
 
     def applies_to_dataset(self, dataset_name: str) -> bool:
         return self.applies_to == "all_datasets" or dataset_name in self.applies_to
+
+    def hyperparameters_for(self, dataset_name: str) -> dict:
+        override = self.dataset_overrides.get(dataset_name)
+        if override is not None and override.hyperparameters is not None:
+            return override.hyperparameters
+        return self.hyperparameters
+
+    def precondition_for(self, dataset_name: str) -> PreconditionConfig:
+        override = self.dataset_overrides.get(dataset_name)
+        if override is not None and override.precondition is not None:
+            return override.precondition
+        return self.precondition
 
     @model_validator(mode="after")
     def _validate_adapter_fields(self) -> "ModelConfig":
@@ -144,6 +168,16 @@ class ExperimentConfig(Frozen):
                 unknown = set(m.applies_to) - dataset_names
                 if unknown:
                     raise ValueError(f"model {m.name!r} applies_to unknown datasets: {unknown}")
+            unknown_overrides = set(m.dataset_overrides) - dataset_names
+            if unknown_overrides:
+                raise ValueError(f"model {m.name!r} dataset_overrides unknown datasets: {unknown_overrides}")
+            not_applicable = {
+                d for d in m.dataset_overrides if not m.applies_to_dataset(d)
+            }
+            if not_applicable:
+                raise ValueError(
+                    f"model {m.name!r} dataset_overrides for datasets it doesn't apply_to: {not_applicable}"
+                )
         for e in self.explainers:
             unknown = set(e.applies_to_models) - model_names
             if unknown:

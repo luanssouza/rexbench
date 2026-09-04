@@ -69,7 +69,7 @@ class EBPRModelAdapter(ModelAdapter):
         self._num_items = None
 
     def check_preconditions(self, dataset: DatasetBundle) -> PreconditionReport:
-        required = self.config.precondition.min_fraction_users_with_2plus
+        required = self.config.precondition_for(dataset.name).min_fraction_users_with_2plus
         if required is None:
             return PreconditionReport.ok()
         stats = dataset.interaction_stats
@@ -93,7 +93,7 @@ class EBPRModelAdapter(ModelAdapter):
         )
 
     def _build_config(self, dataset: DatasetBundle, seed: int, device: str) -> dict:
-        hp = self.config.hyperparameters
+        hp = self.config.hyperparameters_for(dataset.name)
         return {
             "model": self.variant,
             "dataset": dataset.name,
@@ -113,7 +113,19 @@ class EBPRModelAdapter(ModelAdapter):
             "use_cuda": device == "cuda",
             "device_id": 0,
             "top_k": max(dataset.topk),
-            "loo_eval": hp.get("loo_eval", False),
+            # Default True, not False: with loo_eval=False, Engine.evaluate() (external/ebpr/
+            # Code/engine_EBPR.py) returns (map, ndcg, mep, ...) via self._metron.cal_map_at_k(),
+            # which is a stub in the vendored code (Code/metrics.py's cal_map_at_k always
+            # `return 10.999`, real computation commented out below it) — confirmed present as
+            # of external/ebpr commit a627034, not something this pipeline patched. fit() below
+            # unpacks evaluate()'s return as (ndcg, hr, mep, ...) and calls save_implicit(),
+            # which is the loo_eval=True contract; with loo_eval=False that call would silently
+            # bind the stubbed map value to this adapter's `ndcg` variable and call the wrong
+            # save_* method entirely (save_implicit checks best_performance[0], save_explicit
+            # checks best_performance[1] — the two aren't interchangeable). loo_eval=True avoids
+            # cal_map_at_k entirely (uses cal_hit_ratio_loo/cal_ndcg_loo instead) and matches
+            # fit()'s actual evaluate()/save_implicit() call below.
+            "loo_eval": hp.get("loo_eval", True),
             "neighborhood": hp.get("neighborhood", 20),
             "model_dir_explicit": "Output/checkpoints/{}_Epoch{}_MAP@{}_{:.4f}_NDCG@{}_{:.4f}_MEP@{}_{:.4f}_WMEP@{}_{:.4f}_Avg_Pop@{}_{:.4f}_EFD@{}_{:.4f}_Avg_Pair_Sim@{}_{:.4f}.model",
             "model_dir_implicit": "Output/checkpoints/{}_Epoch{}_NDCG@{}_{:.4f}_HR@{}_{:.4f}_MEP@{}_{:.4f}_WMEP@{}_{:.4f}_Avg_Pop@{}_{:.4f}_EFD@{}_{:.4f}_Avg_Pair_Sim@{}_{:.4f}.model",

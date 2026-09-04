@@ -66,9 +66,21 @@ def _load_coat(train_path: str, test_path: str) -> pd.DataFrame:
 
 
 def _load_electronics(path: str) -> pd.DataFrame:
-    """Drops rows with missing user attributes — a MarketBias-specific debiasing filter."""
+    """Drops rows with missing user attributes — a MarketBias-specific debiasing filter.
+
+    BUGFIX (found while investigating why EBPR appeared to only work on some datasets):
+    the raw CSV's `timestamp` column is an ISO date string ("1999-06-13"), not a Unix
+    epoch — the predecessor pipeline's loader passed it through unconverted. That's
+    inconsistent with every other loader's CANONICAL_COLUMNS contract (timestamp = epoch
+    seconds, int) and, more concretely, breaks RecBoleModelAdapter: `.inter` files declare
+    `timestamp:float`, and RecBole fails to parse a literal date string as a float. EBPR
+    itself isn't affected (its split path drops the timestamp column entirely), but fixing
+    the loader here is the correct single source of truth rather than patching around it
+    per-adapter.
+    """
     df = pd.read_csv(path)
     df = df.dropna(subset=["user_attr"])
+    df["timestamp"] = (pd.to_datetime(df["timestamp"]).astype("int64") // 10**9).astype("int64")
     return df[["item_id", "user_id", "rating", "timestamp"]]
 
 
@@ -87,8 +99,17 @@ def _load_rentrunway(path: str) -> pd.DataFrame:
 
 def _load_amazon_digital_music(path: str) -> pd.DataFrame:
     """New loader for datasets/Amazon/Digital_Music.jsonl — confirmed with the user as the
-    true source of the predecessor pipeline's "amazon" dataset."""
-    df = pd.read_json(path, lines=True)
+    true source of the predecessor pipeline's "amazon" dataset.
+
+    BUGFIX: pd.read_json's default `convert_dates=True` auto-detects any column named
+    "timestamp" (it matches the default date-like-column heuristic) and silently parses it
+    as datetime64 instead of leaving the raw epoch-millisecond integers alone — so
+    `df["timestamp"] // 1000` below raised `TypeError: cannot perform __floordiv__ with
+    this index type: DatetimeArray` on every load, unconditionally. This was a real,
+    100%-reproducible crash for this dataset, confirmed by loading the raw file directly.
+    convert_dates=False keeps the column as the raw integers this function expects.
+    """
+    df = pd.read_json(path, lines=True, convert_dates=False)
     df = df.rename(columns={"asin": "item_id"})
     df["timestamp"] = (df["timestamp"] // 1000).astype("int64")  # ms -> s
     return df[CANONICAL_COLUMNS]
