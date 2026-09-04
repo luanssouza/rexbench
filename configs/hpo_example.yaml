@@ -1,0 +1,215 @@
+# Demonstrates the HPO layer. Based on tier1.yaml (same datasets, same EBPR-family
+# sparse-dataset overrides) with a random-search `hpo:` block added to the EBPR entry,
+# tuning lr/num_latent/neighborhood against the validation split.
+#
+# tier1.yaml/full.yaml deliberately stay fixed-hyperparameter (matching AUDIT.md's original
+# methodology faithfully) — HPO is opt-in via this separate config, not a silent behavior
+# change to the reference configs. UBPR/UEBPR are left un-tuned here on purpose: tune EBPR
+# once, then decide whether the same search space is worth repeating for its variants.
+#
+# Run from the rexbench repo root: `rexbench run --config configs/hpo_example.yaml`
+# Output includes trials.parquet/.csv — one row per (dataset, model, trial), so the full
+# search is inspectable, not just the winning hyperparameters.
+
+experiment:
+  name: hpo_example
+  output_dir: rexbench/outputs
+
+determinism:
+  seeds: [2020, 42, 7]
+  reproducibility: true
+  device: auto
+
+datasets:
+  - name: ml100k
+    loader: ml100k
+    raw_path: data/raw/ml100k/u.data
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200}
+    topk: [5, 10]
+    tail_fraction: 0.20
+    kg: {status: available, source_dir: data/raw/pgpr_kg/ml100k}
+
+  - name: ml1m
+    loader: ml1m
+    raw_path: data/raw/ml1m/ratings.dat
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200}
+    topk: [5, 10]
+    tail_fraction: 0.20
+    kg: {status: available, source_dir: data/raw/pgpr_kg/ml1m}
+
+  - name: coat
+    loader: coat
+    raw_path: {train: data/raw/coat/train.ascii, test: data/raw/coat/test.ascii}
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200}
+    topk: [5, 10]
+    tail_fraction: 0.20
+    kg: {status: needs_construction}
+
+  - name: electronics
+    loader: electronics
+    raw_path: data/raw/electronics/df_electronics.csv
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200}
+    topk: [5, 10]
+    tail_fraction: 0.20
+    kg: {status: needs_construction}
+
+  - name: rentrunway
+    loader: rentrunway
+    raw_path: data/raw/rentrunway/renttherunway_final_data.json
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200}
+    topk: [5, 10]
+    tail_fraction: 0.20
+    kg: {status: needs_construction}
+
+  - name: ambar
+    loader: ambar
+    raw_path: data/raw/ambar/ratings_info.csv
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200}
+    topk: [5, 10]
+    tail_fraction: 0.20
+    kg: {status: needs_construction}
+
+  - name: lastfm1k
+    loader: lastfm1k
+    raw_path: data/raw/lastfm1k/userid-timestamp-artid-artname-traid-traname.tsv
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200}
+    topk: [5, 10]
+    tail_fraction: 0.20
+    kg: {status: needs_construction}
+
+  - name: amazon_digital_music
+    loader: amazon_digital_music
+    raw_path: data/raw/amazon_digital_music/Digital_Music.jsonl
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200}
+    topk: [5, 10]
+    tail_fraction: 0.20
+    kg: {status: unsupported}
+
+models:
+  - name: EBPR
+    tier: 1
+    adapter: ebpr
+    variant: EBPR
+    applies_to: all_datasets
+    hyperparameters:
+      num_epoch: 50
+      batch_size: 512
+      lr: 0.001
+      num_latent: 8
+      neighborhood: 20
+      optimizer: adam
+    precondition: {min_fraction_users_with_2plus: 0.5}
+    # Random search over 3 dimensions, 20 trials, evaluated by NDCG@10 on the validation
+    # split (never test). Runs once per dataset before the seed loop — see core/hpo.py.
+    hpo:
+      strategy: random
+      n_trials: 20
+      metric: ndcg
+      k: 10
+      direction: maximize
+      seed: 2020
+      search_space:
+        lr: {type: loguniform, low: 0.0001, high: 0.05}
+        num_latent: {type: choice, values: [4, 8, 16, 32]}
+        neighborhood: {type: choice, values: [5, 10, 20, 30]}
+    dataset_overrides: &sparse_ebpr_overrides
+      # Same sparsity accommodation as tier1.yaml, plus a matching HPO search restricted to
+      # the smaller neighborhood range that actually makes sense on this sparse data (the
+      # unrestricted [5,10,20,30] range above would waste trials on neighborhood sizes the
+      # sparse-dataset session already found to be too diluted).
+      electronics:
+        hyperparameters: {num_epoch: 50, batch_size: 512, lr: 0.001, num_latent: 8, neighborhood: 5, optimizer: adam}
+        precondition: {min_fraction_users_with_2plus: 0.05}
+        hpo:
+          strategy: random
+          n_trials: 20
+          metric: ndcg
+          k: 10
+          direction: maximize
+          seed: 2020
+          search_space:
+            lr: {type: loguniform, low: 0.0001, high: 0.05}
+            num_latent: {type: choice, values: [4, 8, 16, 32]}
+            neighborhood: {type: choice, values: [2, 3, 5]}
+      rentrunway:
+        hyperparameters: {num_epoch: 50, batch_size: 512, lr: 0.001, num_latent: 8, neighborhood: 5, optimizer: adam}
+        precondition: {min_fraction_users_with_2plus: 0.05}
+        hpo:
+          strategy: random
+          n_trials: 20
+          metric: ndcg
+          k: 10
+          direction: maximize
+          seed: 2020
+          search_space:
+            lr: {type: loguniform, low: 0.0001, high: 0.05}
+            num_latent: {type: choice, values: [4, 8, 16, 32]}
+            neighborhood: {type: choice, values: [2, 3, 5]}
+      amazon_digital_music:
+        hyperparameters: {num_epoch: 50, batch_size: 512, lr: 0.001, num_latent: 8, neighborhood: 5, optimizer: adam}
+        precondition: {min_fraction_users_with_2plus: 0.05}
+        hpo:
+          strategy: random
+          n_trials: 20
+          metric: ndcg
+          k: 10
+          direction: maximize
+          seed: 2020
+          search_space:
+            lr: {type: loguniform, low: 0.0001, high: 0.05}
+            num_latent: {type: choice, values: [4, 8, 16, 32]}
+            neighborhood: {type: choice, values: [2, 3, 5]}
+
+  - name: UBPR
+    tier: 1
+    adapter: ebpr
+    variant: UBPR
+    applies_to: all_datasets
+    hyperparameters:
+      num_epoch: 50
+      batch_size: 512
+      lr: 0.001
+      num_latent: 8
+      neighborhood: 20
+      optimizer: adam
+    precondition: {min_fraction_users_with_2plus: 0.5}
+    dataset_overrides: *sparse_ebpr_overrides
+
+  - name: UEBPR
+    tier: 1
+    adapter: ebpr
+    variant: UEBPR
+    applies_to: all_datasets
+    hyperparameters:
+      num_epoch: 50
+      batch_size: 512
+      lr: 0.001
+      num_latent: 8
+      neighborhood: 20
+      optimizer: adam
+    precondition: {min_fraction_users_with_2plus: 0.5}
+    dataset_overrides: *sparse_ebpr_overrides
+
+  # PGPR: applies_to restricted to the datasets with an available pre-linked KG. No HPO
+  # block here — PGPR doesn't use DatasetBundle's split at all (REGISTRY.md's disclosed
+  # scope limitation), so tuning against user_val_dict() would inherit that same caveat.
+  - name: PGPR
+    tier: 1
+    adapter: pgpr
+    applies_to: [ml100k, ml1m]
+    hyperparameters:
+      transe_epochs: 30
+      transe_batch_size: 64
+      agent_epochs: 50
+      agent_batch_size: 32
+    precondition: {min_kg_triples: 1000}
+
+explainers: []
+
+metrics:
+  accuracy: [ndcg, map]
+  fairness: [gini, variance, entropy, arp, arp_normalized, tail_coverage]
+
+statistics:
+  tests: [friedman, quade, nemenyi, kendall_w]
+  alpha: 0.05

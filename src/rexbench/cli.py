@@ -39,6 +39,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     print(f"Run complete: {run_dir}")
     print(f"  results:  {len(collector.results)} rows")
     print(f"  failures: {len(collector.failures)} rows")
+    print(f"  trials:   {len(collector.trials)} rows")
     if args.with_stats:
         cmd_stats(argparse.Namespace(run=str(run_dir), metric=None))
 

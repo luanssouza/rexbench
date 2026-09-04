@@ -195,6 +195,13 @@ class DatasetBundle:
         the ground truth every accuracy/fairness metric evaluates recommendations against."""
         return {uid: set(g["item_id"]) for uid, g in self.test.groupby("user_id")}
 
+    def user_val_dict(self) -> dict:
+        """Same shape as user_test_dict(), from the validation split — what core/hpo.py
+        evaluates trials against. Never used for the numbers actually reported (those come
+        from user_test_dict()), so tuning hyperparameters against this can't leak into the
+        final results."""
+        return {uid: set(g["item_id"]) for uid, g in self.val.groupby("user_id")}
+
 
 def _remap_ids(df: pd.DataFrame, user_map: dict, item_map: dict) -> pd.DataFrame:
     out = df.copy()

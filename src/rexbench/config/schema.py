@@ -72,6 +72,57 @@ class PreconditionConfig(Frozen):
     min_kg_triples: int | None = None
 
 
+class HPOParamSpec(Frozen):
+    """One hyperparameter's search dimension. `type="choice"` needs `values`; the 3 numeric
+    types need `low`/`high`. `int_uniform` samples an int (inclusive), `uniform` a float,
+    `loguniform` a float sampled in log-space (for scale-free params like learning rate)."""
+    type: Literal["choice", "int_uniform", "uniform", "loguniform"]
+    values: list | None = None
+    low: float | None = None
+    high: float | None = None
+
+    @model_validator(mode="after")
+    def _validate_bounds(self) -> "HPOParamSpec":
+        if self.type == "choice":
+            if not self.values:
+                raise ValueError("HPOParamSpec type='choice' requires a non-empty values list")
+        else:
+            if self.low is None or self.high is None:
+                raise ValueError(f"HPOParamSpec type={self.type!r} requires low and high")
+            if self.low >= self.high:
+                raise ValueError(f"HPOParamSpec: low ({self.low}) must be < high ({self.high})")
+            if self.type == "loguniform" and self.low <= 0:
+                raise ValueError("HPOParamSpec type='loguniform' requires low > 0")
+        return self
+
+
+class HPOConfig(Frozen):
+    """Config-declared hyperparameter search. Runs once per (model, dataset) — not once per
+    experiment seed, see core/runner.py — evaluated against the validation split only, never
+    test, to avoid leaking the tuning signal into the numbers actually reported."""
+    strategy: Literal["grid", "random"] = "random"
+    n_trials: int = 20  # ignored for strategy="grid" (runs the full cartesian product)
+    metric: str = "ndcg"
+    k: int = 10
+    direction: Literal["maximize", "minimize"] = "maximize"
+    seed: int = 2020  # search-only: every trial's fit() reuses this SAME seed, isolating the
+                       # hyperparameter effect from seed noise; a separate RNG derived from
+                       # it (not model training) decides which combinations get sampled
+    search_space: dict[str, HPOParamSpec] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _validate_grid_is_discrete(self) -> "HPOConfig":
+        if self.strategy == "grid":
+            non_choice = [name for name, spec in self.search_space.items() if spec.type != "choice"]
+            if non_choice:
+                raise ValueError(
+                    f"strategy='grid' requires every search_space dimension to be "
+                    f"type='choice' (no natural grid over a continuous range); "
+                    f"non-choice dimensions: {non_choice}"
+                )
+        return self
+
+
 class DatasetOverride(Frozen):
     """Per-(model, dataset) override — e.g. a lower EBPR sparsity precondition and a
     smaller neighborhood specifically for known-sparse datasets, without duplicating the
@@ -81,6 +132,7 @@ class DatasetOverride(Frozen):
     keeps "what ran with what config" unambiguous from the override block alone)."""
     hyperparameters: dict | None = None
     precondition: PreconditionConfig | None = None
+    hpo: HPOConfig | None = None
 
 
 class ModelConfig(Frozen):
@@ -92,6 +144,7 @@ class ModelConfig(Frozen):
     applies_to: Literal["all_datasets"] | list[str] = "all_datasets"
     hyperparameters: dict = Field(default_factory=dict)
     precondition: PreconditionConfig = PreconditionConfig()
+    hpo: HPOConfig | None = None
     dataset_overrides: dict[str, DatasetOverride] = Field(default_factory=dict)
 
     def applies_to_dataset(self, dataset_name: str) -> bool:
@@ -108,6 +161,12 @@ class ModelConfig(Frozen):
         if override is not None and override.precondition is not None:
             return override.precondition
         return self.precondition
+
+    def hpo_for(self, dataset_name: str) -> HPOConfig | None:
+        override = self.dataset_overrides.get(dataset_name)
+        if override is not None and override.hpo is not None:
+            return override.hpo
+        return self.hpo
 
     @model_validator(mode="after")
     def _validate_adapter_fields(self) -> "ModelConfig":

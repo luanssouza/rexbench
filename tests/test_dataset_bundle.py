@@ -3,7 +3,7 @@ import math
 import pandas as pd
 import pytest
 
-from rexbench.core.dataset import compute_interaction_stats
+from rexbench.core.dataset import DatasetBundle, InteractionStats, compute_interaction_stats
 from rexbench.metrics.tail import compute_tail_items
 
 
@@ -35,3 +35,23 @@ def test_compute_interaction_stats():
     assert stats.fraction_users_lt_2 == pytest.approx(2 / 3)
     assert stats.mean_interactions_per_user == pytest.approx(5 / 3)
     assert stats.median_interactions_per_user == 1.0
+
+
+def _minimal_bundle(val_df: pd.DataFrame, test_df: pd.DataFrame) -> DatasetBundle:
+    stats = InteractionStats(0.0, 0.0, 0.0, 0, 0, 0)
+    return DatasetBundle(
+        name="t", train=pd.DataFrame(columns=["user_id", "item_id", "rating", "timestamp"]),
+        val=val_df, test=test_df, num_users=0, num_items=0,
+        tail_items=pd.Index([]), popularity=pd.Series(dtype=int),
+        user_id_map={}, item_id_map={}, kg_status="unsupported", kg_path=None,
+        interaction_stats=stats, topk=[10], tail_fraction=0.2,
+    )
+
+
+def test_user_val_dict_and_user_test_dict_are_independent():
+    val_df = pd.DataFrame({"user_id": [0, 0, 1], "item_id": [10, 11, 12]})
+    test_df = pd.DataFrame({"user_id": [0, 1], "item_id": [20, 21]})
+    bundle = _minimal_bundle(val_df, test_df)
+
+    assert bundle.user_val_dict() == {0: {10, 11}, 1: {12}}
+    assert bundle.user_test_dict() == {0: {20}, 1: {21}}

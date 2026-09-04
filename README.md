@@ -26,7 +26,7 @@ git submodule update --init --recursive
 
 | Model family | Wraps | Adapter |
 |---|---|---|
-| Pop, BPR, MultiVAE, NeuMF, SLIM (Tier 2) | vendored RecBole (pip dependency) + `models/recbole_adapter.py`'s own `.inter`/YAML conversion (ported from the predecessor pipeline's preprocessing code) | `models/recbole_adapter.py` |
+| Pop, BPR, MultiVAE, NeuMF, SLIM (Tier 2) | vendored RecBole (pip dependency) + `models/recbole_adapter.py`'s own `.inter` file writer | `models/recbole_adapter.py` |
 | BPR/EBPR/UBPR/UEBPR (Tier 1, required) | `external/ebpr/Code/{EBPR_model,engine_EBPR,data}.py` (submodule, your fork) | `models/ebpr_adapter.py` |
 | PGPR (Tier 1, required) | `external/explanation-quality-recsys/models/PGPR/*.py` (submodule, your fork; the outer, actually-executed tree) | `models/pgpr_adapter.py` |
 | AR, KNN explainers | `external/recoxplainer` (submodule, your fork) + `explainers/_bridge.py`'s bridging code (ported from the predecessor pipeline's explanation layer) | `explainers/recoxplainer_{ar,knn}.py` |
@@ -122,11 +122,58 @@ addressed (pin updated / adapter default fixed), documented there in full.
 - **PGPR's knowledge-graph data has no verified canonical download source** — see
   `REGISTRY.md` and `data/README.md`.
 
+## Fixed: RecBole was not using the exact rexbench split
+
+Until this pass, `RecBoleModelAdapter` merged `dataset.train`+`dataset.val` into one file and
+gave RecBole a `9:1` ratio to re-split internally (`eval_args.split.RS`) — RecBole then drew
+its *own* fresh random split of that merged data with its own seeded RNG. That split was
+consistent across RecBole models but was **not the literal `dataset.val` boundary**
+EBPR/UBPR/UEBPR/PGPR train against via the `test` column mechanism — a real, previously
+undiscovered violation of "the same split is reused by every model," which this whole
+pipeline exists to guarantee. Fixed using RecBole's `benchmark_filename` mechanism (verified
+against the vendored RecBole source, not guessed — `Dataset.build()` returns file-defined
+split boundaries with no internal re-splitting when it's set): `models/recbole_adapter.py`
+now writes `dataset.train`/`.val`/`.test` as three separate `.inter` files RecBole loads
+verbatim. Also dropped the YAML-file round trip entirely in favor of building the RecBole
+`Config` directly from a Python dict — simpler, not just the bug fix.
+
+## Hyperparameter optimization
+
+`ModelConfig.hpo` (and `DatasetOverride.hpo`, following the same per-dataset pattern as
+`dataset_overrides` above) declares a config-driven grid or random search — see
+`configs/hpo_example.yaml` for a worked example on EBPR. No external search library:
+implemented directly in `core/hpo.py`/`core/hpo_search.py` using only the standard library —
+Ray Tune and Optuna were both considered and rejected, since AUDIT.md already found Ray Tune
+caused a hard version-mismatch crash in the ProtoMF baseline and this pipeline's merged
+environment (numpy<2.0, torch>=2.0 exactly) is fragile enough already without adding another
+pinned dependency.
+
+Key properties:
+- **Runs once per (dataset, model), not once per seed** — `core/runner.py`'s loop is now
+  `dataset -> model -> seed`; HPO happens before the seed loop, and every seed then trains
+  with the winning hyperparameters. Tuning per seed would multiply cost by
+  `n_trials × n_seeds` for no benefit (the seed loop measures variance of the *chosen*
+  config, not a reason to re-search it).
+- **Evaluated against the validation split only** (`DatasetBundle.user_val_dict()`, new
+  alongside the existing `user_test_dict()`) — never `test`, so tuning can't leak into the
+  numbers actually reported.
+- **Every trial is recorded**, ok or not, in a new `trials.parquet`/`.csv` output — same
+  never-silently-drop philosophy as `results`/`failures`. A trial that crashes or hits
+  `MetricRangeError` doesn't abort the search; it's logged and treated as worst-possible for
+  selection purposes.
+- Search types: `choice` (any values list), `int_uniform`/`uniform`/`loguniform` (numeric
+  ranges) — `strategy: grid` requires every dimension to be `choice` (no natural grid over a
+  continuous range; rejected at config-validation time otherwise).
+- **Not wired in for PGPR** — it doesn't use `DatasetBundle`'s split at all (the scope
+  limitation above), so HPO's val-based evaluation would inherit that same caveat; left out
+  of `configs/hpo_example.yaml` for PGPR rather than silently pretending it's fixed.
+
 ## Running
 
 ```bash
-rexbench run --config configs/tier1.yaml   # EBPR family + PGPR only
-rexbench run --config configs/full.yaml    # + Tier 2 baselines + AR/KNN explainers
+rexbench run --config configs/tier1.yaml       # EBPR family + PGPR only
+rexbench run --config configs/full.yaml        # + Tier 2 baselines + AR/KNN explainers
+rexbench run --config configs/hpo_example.yaml # tier1.yaml + HPO search on EBPR
 rexbench aggregate --run outputs/<run_id>
 rexbench stats --run outputs/<run_id>
 ```
@@ -135,18 +182,23 @@ Each run writes `outputs/<run_id>/`: `config.yaml` (copied verbatim), `manifest.
 commit, library versions, hardware, disclosed corrections), `results.parquet`/`.csv` (long
 format: dataset, model, explainer, metric, seed, k, value, status), `failures.parquet`/`.csv`
 (one row per non-ok attempt, with exception type/message/traceback or precondition
-measurements — never silently dropped).
+measurements — never silently dropped), `trials.parquet`/`.csv` (one row per HPO trial, when
+any model's config declares one — see Hyperparameter optimization above).
 
 ## Verification status
 
 Run without the merged environment installed:
 ```bash
-PYTHONPATH=src python3 -m pytest tests/test_config_schema.py tests/test_metrics_validate.py tests/test_dataset_bundle.py -v
+PYTHONPATH=src python3 -m pytest tests/test_config_schema.py tests/test_metrics_validate.py tests/test_dataset_bundle.py tests/test_hpo.py -v
 ```
-20/20 passing — covers the config schema (including both real configs, and the per-dataset
-`dataset_overrides` mechanism below), the dataset/split/tail-item logic (now dependency-free
-after absorbing the predecessor pipeline's loaders — `core/dataset.py` no longer needs
-RecBole just to import), and, most importantly, the Gini fix (AUDIT.md section 5) against
+31/31 passing — covers the config schema (including all three real configs, the per-dataset
+`dataset_overrides` mechanism, and `HPOConfig`/`HPOParamSpec` validation), the dataset/split/
+tail-item logic (dependency-free after absorbing the predecessor pipeline's loaders —
+`core/dataset.py` no longer needs RecBole just to import), the HPO grid/random sampling
+logic (`core/hpo_search.py`, deliberately kept import-light the same way — `core/hpo.py`
+itself needs the full model-adapter stack via `build_model`, so its pure sampling logic
+lives in a separate module that doesn't), and, most importantly, the Gini fix (AUDIT.md
+section 5) against
 the exact degenerate inputs traced there: all-zero scores and a single-user dict now return
 `NaN`, all-equal-nonzero scores return `0.0`, and the normal case is unchanged.
 

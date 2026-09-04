@@ -1,4 +1,4 @@
-"""The seed x dataset x model x explainer loop and failure classification.
+"""The dataset x model x (HPO once) x seed x explainer loop and failure classification.
 
 AUDIT.md's FAILURE HANDLING requirement, made concrete: every attempted combination
 produces a row in `results` (status=ok) or `failures` (status in {crashed, degenerate,
@@ -6,24 +6,36 @@ resource, skipped, precondition-unmet}) — nothing is silently dropped, and a m
 returns an out-of-range value (rexbench.metrics.validate.MetricRangeError) is caught and
 recorded as `degenerate` rather than allowed to reach results.parquet — this is the
 mechanism that would have caught AUDIT.md section 5's Gini -1.0 sentinel as a classified
-failure instead of a silent out-of-range number.
+failure instead of a silent out-of-range number. HPO trials (core/hpo.py) get the same
+treatment via the `trials` table.
+
+Loop order is `dataset -> model -> seed`, not `seed -> dataset -> model`: HPO (when a model
+declares one via ModelConfig.hpo_for) runs exactly once per (dataset, model), before the
+seed loop, since re-tuning per seed would multiply cost by n_trials x n_seeds for no benefit
+— the seed loop exists to measure variance of the *final chosen* hyperparameters, not to
+re-search them. dataset_bundles are built once up front regardless of loop order, so this
+doesn't change dataset-loading behavior.
 """
 from __future__ import annotations
 
 import traceback
-from typing import Any
 
 import pandas as pd
 
-from rexbench.config.schema import ExperimentConfig
+from rexbench.config.schema import ExperimentConfig, ModelConfig
 from rexbench.core.dataset import DatasetBundle, build_dataset_bundle
 from rexbench.core.determinism import resolve_device, seed_all
+from rexbench.core.hpo import run_hpo
 from rexbench.core.registry import build_explainer, build_model
 from rexbench.core.results_io import ResultsCollector
-from rexbench.metrics import accuracy, explanation_quality, fairness
+from rexbench.metrics import explanation_quality
+from rexbench.metrics.dispatch import compute_metric_value
 from rexbench.metrics.validate import MetricRangeError
 
 _RESOURCE_SIGNATURES = ("out of memory", "cuda oom", "cannot allocate memory")
+
+_ACCURACY_METRICS = ("ndcg", "map")
+_FAIRNESS_METRICS = ("gini", "variance", "entropy", "arp", "arp_normalized", "tail_coverage")
 
 
 def _classify_exception(exc: Exception) -> str:
@@ -35,56 +47,37 @@ def _classify_exception(exc: Exception) -> str:
     return "crashed"
 
 
-def _mean(values) -> float:
-    values = list(values)
-    return sum(values) / len(values) if values else 0.0
-
-
 def _compute_recommendation_metrics(
     collector: ResultsCollector, dataset: DatasetBundle, dataset_name: str, model_name: str,
     seed: int, recs: pd.DataFrame, requested_accuracy: list[str], requested_fairness: list[str],
 ) -> None:
     user_test_dict = dataset.user_test_dict()
+    metric_names = [m for m in _ACCURACY_METRICS if m in requested_accuracy]
+    metric_names += [m for m in _FAIRNESS_METRICS if m != "tail_coverage" and m in requested_fairness]
+    # results.parquet disambiguates this from the explanation-quality metric of the same
+    # short config name (AUDIT.md flagged the ambiguity) by storing it as tail_coverage_rec.
+    stored_name = {m: m for m in metric_names}
+    if "tail_coverage" in requested_fairness:
+        metric_names.append("tail_coverage")
+        stored_name["tail_coverage"] = "tail_coverage_rec"
+
     for k in dataset.topk:
-        try:
-            ndcg_dict = accuracy.dataset_ndcg_k(recs, user_test_dict, top_k=k)
-            if "ndcg" in requested_accuracy:
-                collector.add_result(dataset_name, model_name, None, "ndcg", seed, k, _mean(ndcg_dict.values()))
-            if "map" in requested_accuracy:
-                map_value = accuracy.map_at_k(recs, user_test_dict, top_k=k)
-                collector.add_result(dataset_name, model_name, None, "map", seed, k, map_value)
-            if "gini" in requested_fairness:
-                collector.add_result(dataset_name, model_name, None, "gini", seed, k, fairness.gini(ndcg_dict))
-            if "variance" in requested_fairness:
-                collector.add_result(dataset_name, model_name, None, "variance", seed, k, fairness.variance(ndcg_dict))
-            if "entropy" in requested_fairness:
-                collector.add_result(dataset_name, model_name, None, "entropy", seed, k, fairness.entropy(recs, top_k=k))
-            if "arp" in requested_fairness or "arp_normalized" in requested_fairness:
-                if "arp" in requested_fairness:
-                    collector.add_result(
-                        dataset_name, model_name, None, "arp", seed, k,
-                        accuracy.average_recommendation_popularity(recs, dataset.popularity, top_k=k),
-                    )
-                if "arp_normalized" in requested_fairness:
-                    collector.add_result(
-                        dataset_name, model_name, None, "arp_normalized", seed, k,
-                        accuracy.average_recommendation_popularity_normalized(recs, dataset.popularity, top_k=k),
-                    )
-            if "tail_coverage" in requested_fairness:  # tail_coverage_rec, recommendation-list tail exposure
-                collector.add_result(
-                    dataset_name, model_name, None, "tail_coverage_rec", seed, k,
-                    fairness.tail_coverage_rec(recs, dataset.tail_items),
+        for metric_name in metric_names:
+            try:
+                value = compute_metric_value(metric_name, recs, user_test_dict, dataset, k)
+            except MetricRangeError as exc:
+                collector.add_failure(
+                    dataset_name, model_name, None, seed, "degenerate",
+                    exception_type=type(exc).__name__, message=str(exc),
                 )
-        except MetricRangeError as exc:
-            collector.add_failure(
-                dataset_name, model_name, None, seed, "degenerate",
-                exception_type=type(exc).__name__, message=str(exc),
-            )
-        except Exception as exc:  # noqa: BLE001 — deliberately broad, see module docstring
-            collector.add_failure(
-                dataset_name, model_name, None, seed, _classify_exception(exc),
-                exception_type=type(exc).__name__, message=str(exc), traceback=traceback.format_exc(),
-            )
+                continue
+            except Exception as exc:  # noqa: BLE001 — deliberately broad, see module docstring
+                collector.add_failure(
+                    dataset_name, model_name, None, seed, _classify_exception(exc),
+                    exception_type=type(exc).__name__, message=str(exc), traceback=traceback.format_exc(),
+                )
+                continue
+            collector.add_result(dataset_name, model_name, None, stored_name[metric_name], seed, k, value)
 
 
 def _compute_explanation_metrics(
@@ -117,6 +110,32 @@ def _compute_explanation_metrics(
         )
 
 
+def _resolve_hyperparameters(
+    collector: ResultsCollector, model_config: ModelConfig, dataset: DatasetBundle, device: str,
+) -> ModelConfig:
+    """Runs HPO once for this (model, dataset) if configured, logs every trial, and returns
+    a ModelConfig with the winning hyperparameters baked in as the top-level value (clearing
+    any stale per-dataset override for this dataset so it doesn't get re-applied on top) —
+    every seed's build_model() call downstream resolves hyperparameters_for(dataset.name) to
+    the tuned values transparently, with no ModelAdapter interface change needed."""
+    hpo = model_config.hpo_for(dataset.name)
+    if hpo is None:
+        return model_config
+
+    best_hp, trial_records = run_hpo(model_config, dataset, hpo, device)
+    for trial in trial_records:
+        collector.add_trial(
+            dataset.name, model_config.name, trial.trial_id, trial.hyperparameters,
+            hpo.metric, hpo.k, trial.value, trial.status, trial.exception_type, trial.message,
+        )
+    return model_config.model_copy(update={
+        "hyperparameters": best_hp,
+        "dataset_overrides": {
+            name: ov for name, ov in model_config.dataset_overrides.items() if name != dataset.name
+        },
+    })
+
+
 def run_experiment(config: ExperimentConfig) -> ResultsCollector:
     collector = ResultsCollector()
     device = resolve_device(config.determinism.device)
@@ -125,22 +144,26 @@ def run_experiment(config: ExperimentConfig) -> ResultsCollector:
         ds.name: build_dataset_bundle(ds) for ds in config.datasets
     }
 
-    for seed in config.determinism.seeds:
-        for dataset_config in config.datasets:
-            dataset = dataset_bundles[dataset_config.name]
-            for model_config in config.models:
-                if not model_config.applies_to_dataset(dataset_config.name):
-                    continue
+    for dataset_config in config.datasets:
+        dataset = dataset_bundles[dataset_config.name]
+        for model_config in config.models:
+            if not model_config.applies_to_dataset(dataset_config.name):
+                continue
 
-                model = build_model(model_config)
-                report = model.check_preconditions(dataset)
-                if not report.satisfied:
+            probe = build_model(model_config)
+            report = probe.check_preconditions(dataset)
+            if not report.satisfied:
+                for seed in config.determinism.seeds:
                     collector.add_failure(
                         dataset_config.name, model_config.name, None, seed, "precondition-unmet",
                         measurements=report.measurements, requirement=report.requirement, reason=report.reason,
                     )
-                    continue
+                continue
 
+            resolved_config = _resolve_hyperparameters(collector, model_config, dataset, device)
+
+            for seed in config.determinism.seeds:
+                model = build_model(resolved_config)
                 seed_all(seed)
                 try:
                     model.fit(dataset, seed, device)

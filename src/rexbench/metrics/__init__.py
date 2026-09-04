@@ -1,4 +1,7 @@
-from rexbench.metrics import accuracy, explanation_quality, fairness, tail
+from rexbench.metrics import accuracy, dispatch, explanation_quality, fairness, tail
 from rexbench.metrics.validate import MetricRangeError, validated_range
 
-__all__ = ["accuracy", "fairness", "explanation_quality", "tail", "validated_range", "MetricRangeError"]
+__all__ = [
+    "accuracy", "fairness", "explanation_quality", "tail", "dispatch",
+    "validated_range", "MetricRangeError",
+]
