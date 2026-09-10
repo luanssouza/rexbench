@@ -13,7 +13,6 @@ import pandas as pd
 
 from rexbench.config.load import load_config
 from rexbench.core.determinism import build_manifest, resolve_device
-from rexbench.core.runner import run_experiment
 from rexbench.stats.aggregate import aggregate_across_seeds, wide_pivot
 from rexbench.stats.significance import friedman_test, kendall_w, quade_test
 
@@ -23,6 +22,10 @@ def _run_id(experiment_name: str) -> str:
 
 
 def cmd_run(args: argparse.Namespace) -> None:
+    from rexbench.core.runner import run_experiment  # lazy: needs torch/RecBole/EBPR/PGPR,
+    # `split`/`aggregate`/`stats` don't and shouldn't require that whole environment just to
+    # import this module.
+
     config = load_config(args.config)
     run_dir = Path(config.experiment.output_dir) / _run_id(config.experiment.name)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -42,6 +45,32 @@ def cmd_run(args: argparse.Namespace) -> None:
     print(f"  trials:   {len(collector.trials)} rows")
     if args.with_stats:
         cmd_stats(argparse.Namespace(run=str(run_dir), metric=None))
+
+
+def cmd_split(args: argparse.Namespace) -> None:
+    """Materialize (or verify) every dataset's train/val/test split to
+    `dataset.split.store_dir`, without touching any model -- run this locally, then copy
+    the resulting directories (e.g. via rsync/scp) to another machine (a Lightning AI
+    Studio) so `rexbench run` there loads the identical split instead of recomputing it.
+    Only needs pandas/pydantic -- not torch/RecBole/EBPR/PGPR -- so this works even in an
+    environment that doesn't have the full merged environment installed."""
+    from rexbench.core.dataset import build_dataset_bundle  # lazy: keeps `rexbench run`'s
+    # heavier import chain out of the (already lightweight) aggregate/stats path above.
+
+    config = load_config(args.config)
+    for dataset_config in config.datasets:
+        store_dir = dataset_config.split.store_dir
+        if store_dir is None:
+            print(f"{dataset_config.name}: split.store_dir not set, skipping (in-memory split, recomputed on every run)")
+            continue
+        already_persisted = (Path(store_dir) / "split_meta.json").exists()
+        bundle = build_dataset_bundle(dataset_config)
+        verb = "verified existing" if already_persisted else "wrote new"
+        print(
+            f"{dataset_config.name}: {verb} split at {store_dir} "
+            f"(train={len(bundle.train)}, val={len(bundle.val)}, test={len(bundle.test)} rows, "
+            f"{bundle.num_users} users, {bundle.num_items} items)"
+        )
 
 
 def cmd_aggregate(args: argparse.Namespace) -> None:
@@ -83,6 +112,12 @@ def main(argv: list[str] | None = None) -> None:
     run_p.add_argument("--config", required=True)
     run_p.add_argument("--with-stats", action="store_true")
     run_p.set_defaults(func=cmd_run)
+
+    split_p = sub.add_parser(
+        "split", help="Materialize (or verify) every dataset's split to disk, for reuse across machines"
+    )
+    split_p.add_argument("--config", required=True)
+    split_p.set_defaults(func=cmd_split)
 
     agg_p = sub.add_parser("aggregate", help="Mean +/- std across seeds for a completed run")
     agg_p.add_argument("--run", required=True)

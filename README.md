@@ -174,9 +174,60 @@ Key properties:
   limitation above), so HPO's val-based evaluation would inherit that same caveat; left out
   of `configs/hpo_example.yaml` for PGPR rather than silently pretending it's fixed.
 
+## Persisted splits (reproducing the exact split across machines)
+
+Without `split.store_dir` set, `DatasetBundle.train`/`.val`/`.test` are computed **in
+memory, fresh, on every `rexbench run`** — reproducible only in the sense that the same raw
+file + the same `split.random_state`/`sample.seed` deterministically re-derive the same rows
+via `core/splits.py`. That's sufficient on one machine, but it means two different
+environments (e.g. your laptop and a Lightning AI Studio) are trusting that pandas'/numpy's
+sampling algorithms behave identically across versions to get byte-identical splits — usually
+true, but not something this pipeline should have to assume silently for a reproducibility
+study.
+
+Setting `split.store_dir: data/splits/<name>` on a dataset removes that assumption entirely:
+the first time `build_dataset_bundle()` runs for that dataset, it writes
+`train.csv`/`val.csv`/`test.csv` (original id space) plus a `split_meta.json` fingerprint to
+that directory; every subsequent call — on this machine or any other holding a copy of that
+directory — loads those exact files instead of recomputing anything, and never touches the
+raw dataset file again. `configs/tier1.yaml`/`full.yaml`/`hpo_example.yaml` all point at the
+same `data/splits/<name>` (they share identical split settings, so the same materialized
+split is correct for all three); `configs/smoke_test.yaml` uses `data/splits/smoke_test/<name>`
+so its sampled split can never collide with a full-scale one at the same path.
+
+If something *is* already persisted at `store_dir` but was computed under different split
+settings than the config now pointing at it, loading raises immediately rather than silently
+reusing a mismatched split (`split_meta.json` is compared field-by-field — see
+`core/dataset.py`'s `_split_meta`/`_load_persisted_split`).
+
+**Workflow** — split locally once, run the identical split anywhere:
+```bash
+# 1. On your machine, with the raw data already downloaded (data/README.md):
+rexbench split --config configs/tier1.yaml
+# -> writes data/splits/<dataset>/{train,val,test}.csv + split_meta.json for every dataset
+#    that has store_dir set. Needs only pandas/pydantic -- no torch/RecBole/EBPR/PGPR -- so
+#    this works even without the full merged environment installed.
+
+# 2. Copy the result to wherever you're actually going to train (e.g. a Lightning AI Studio):
+rsync -avz data/splits/ my-studio:rexbench/data/splits/
+
+# 3. Run there -- rexbench run loads the persisted split instead of recomputing it, so the
+#    exact same rows are used for every model regardless of which machine trained it:
+rexbench run --config configs/tier1.yaml
+```
+This applies identically to `configs/smoke_test.yaml`'s sampled splits and to
+`tier1.yaml`/`full.yaml`'s full-scale ones — sampling (`SampleConfig`) happens before the
+split step either way, so the persisted files always reflect whatever `load_raw()` actually
+produced.
+
+`data/splits/` is gitignored, same as `data/raw/` — the persisted files still contain real
+dataset rows (a reorganization of licensed content, not a reduction of it), so they travel
+between machines by hand (`rsync`/`scp`/the Studio's file browser), never via git.
+
 ## Running
 
 ```bash
+rexbench split --config configs/tier1.yaml     # materialize data/splits/* (see above) -- optional, skip if no dataset sets store_dir
 rexbench run --config configs/smoke_test.yaml  # everything we have, sampled tiny — run this first
 rexbench run --config configs/tier1.yaml       # EBPR family + PGPR only
 rexbench run --config configs/full.yaml        # + Tier 2 baselines + AR/KNN explainers

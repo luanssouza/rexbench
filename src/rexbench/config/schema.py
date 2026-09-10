@@ -38,6 +38,14 @@ class SplitConfig(Frozen):
     test_size: float = 0.2
     random_state: int = 200
     min_interactions: int = 5  # only used by strategy="temporal"
+    # When set, the train/val/test split is materialized to this directory the first time
+    # it's computed (train.csv/val.csv/test.csv + split_meta.json), and every subsequent
+    # build_dataset_bundle() call for this dataset loads those exact files instead of
+    # recomputing the split -- copy this directory to another machine (e.g. a Lightning AI
+    # Studio) to guarantee byte-identical splits there too, independent of pandas/numpy
+    # version drift. None (default) keeps the old in-memory-only, recompute-every-time
+    # behavior. See core/dataset.py's _persist_split/_load_persisted_split.
+    store_dir: str | None = None
 
 
 class NegativeSamplingConfig(Frozen):

@@ -9,6 +9,7 @@ audit time; confirmed with the user to be Amazon Digital Music going forward).
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -247,26 +248,98 @@ def _remap_ids(df: pd.DataFrame, user_map: dict, item_map: dict) -> pd.DataFrame
     return out
 
 
+SPLIT_META_FILENAME = "split_meta.json"
+
+
+def _split_meta(config: DatasetConfig) -> dict:
+    """Everything that determines the exact contents of a materialized split. Compared
+    against the stored meta on load so a persisted split silently reused from a differently
+    configured run is a loud error, not a silent correctness bug."""
+    return {
+        "raw_path": config.raw_path,
+        "split": {
+            "strategy": config.split.strategy,
+            "val_size": config.split.val_size,
+            "test_size": config.split.test_size,
+            "random_state": config.split.random_state,
+            "min_interactions": config.split.min_interactions,
+        },
+        "sample": {
+            "max_users": config.sample.max_users,
+            "max_interactions_per_user": config.sample.max_interactions_per_user,
+            "seed": config.sample.seed,
+        },
+    }
+
+
+def _persist_split(
+    store_dir: Path, config: DatasetConfig, train: pd.DataFrame, val: pd.DataFrame, test: pd.DataFrame,
+) -> None:
+    store_dir.mkdir(parents=True, exist_ok=True)
+    train[CANONICAL_COLUMNS].to_csv(store_dir / "train.csv", index=False)
+    val[CANONICAL_COLUMNS].to_csv(store_dir / "val.csv", index=False)
+    test[CANONICAL_COLUMNS].to_csv(store_dir / "test.csv", index=False)
+    (store_dir / SPLIT_META_FILENAME).write_text(json.dumps(_split_meta(config), indent=2, default=str))
+
+
+def _load_persisted_split(
+    store_dir: Path, config: DatasetConfig,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame] | None:
+    """Returns the persisted (train, val, test) in original raw-id space if `store_dir`
+    already holds a complete, matching split; None if nothing is persisted yet (the caller
+    should then compute and persist it). Raises if something IS persisted there but was
+    computed from different settings -- reusing it anyway would silently break the
+    "same split for every model" guarantee this pipeline exists to provide."""
+    paths = {name: store_dir / f"{name}.csv" for name in ("train", "val", "test")}
+    meta_path = store_dir / SPLIT_META_FILENAME
+    if not (meta_path.exists() and all(p.exists() for p in paths.values())):
+        return None
+
+    stored_meta = json.loads(meta_path.read_text())
+    current_meta = _split_meta(config)
+    if stored_meta != current_meta:
+        raise ValueError(
+            f"persisted split at {store_dir} was computed from different settings than the "
+            f"dataset config using it now (stored: {stored_meta!r}, current: {current_meta!r}). "
+            f"Refusing to silently reuse a mismatched split -- delete {store_dir} to let it "
+            f"recompute, or point split.store_dir somewhere else."
+        )
+    return tuple(pd.read_csv(p) for p in paths.values())  # type: ignore[return-value]
+
+
 def build_dataset_bundle(config: DatasetConfig) -> DatasetBundle:
     """Load raw data, split ONCE per dataset (deterministic given config.split.random_state,
     independent of model seed — AUDIT.md 4.2 found the split should be, and now
     contractually is, reused by every model trained on this dataset), remap ids to a
-    canonical 0..n-1 space, and precompute tail items / popularity / interaction stats once."""
-    raw = load_raw(config)
-    stats = compute_interaction_stats(raw)
+    canonical 0..n-1 space, and precompute tail items / popularity / interaction stats once.
 
-    if config.split.strategy == "random":
-        train, val, test = _random_split(
-            raw, val_size=config.split.val_size, test_size=config.split.test_size,
-            random_state=config.split.random_state,
-        )
+    When config.split.store_dir is set, the split is materialized to disk the first time
+    it's computed and loaded verbatim from there on every subsequent call (here or on a
+    different machine holding a copy of that directory) instead of being recomputed --
+    see _persist_split/_load_persisted_split."""
+    store_dir = Path(config.split.store_dir) if config.split.store_dir else None
+    persisted = _load_persisted_split(store_dir, config) if store_dir is not None else None
+
+    if persisted is not None:
+        train, val, test = persisted
+        raw = pd.concat([train, val, test], ignore_index=True)
     else:
-        train, val, test = _temporal_split(
-            raw, user_col="user_id", temp_col="timestamp",
-            val_size=config.split.val_size, test_size=config.split.test_size,
-            min_interactions=config.split.min_interactions,
-        )
+        raw = load_raw(config)
+        if config.split.strategy == "random":
+            train, val, test = _random_split(
+                raw, val_size=config.split.val_size, test_size=config.split.test_size,
+                random_state=config.split.random_state,
+            )
+        else:
+            train, val, test = _temporal_split(
+                raw, user_col="user_id", temp_col="timestamp",
+                val_size=config.split.val_size, test_size=config.split.test_size,
+                min_interactions=config.split.min_interactions,
+            )
+        if store_dir is not None:
+            _persist_split(store_dir, config, train, val, test)
 
+    stats = compute_interaction_stats(raw)
     users = sorted(raw["user_id"].unique())
     items = sorted(raw["item_id"].unique())
     user_map = {u: i for i, u in enumerate(users)}

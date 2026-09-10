@@ -3,9 +3,10 @@ import math
 import pandas as pd
 import pytest
 
+from rexbench.config.schema import DatasetConfig, SplitConfig
 from rexbench.core.dataset import (
     DatasetBundle, InteractionStats, _cap_interactions_per_user, _subsample_users,
-    compute_interaction_stats,
+    build_dataset_bundle, compute_interaction_stats,
 )
 from rexbench.metrics.tail import compute_tail_items
 
@@ -129,3 +130,68 @@ def test_cap_interactions_per_user_deterministic_given_same_seed():
         a.sort_values(["user_id", "item_id"]).reset_index(drop=True),
         b.sort_values(["user_id", "item_id"]).reset_index(drop=True),
     )
+
+
+def _write_ml100k_style(path, num_users=20, items_per_user=5):
+    rows = [
+        f"{u}\t{i}\t{(u + i) % 5 + 1}\t{1000 + u * 100 + i}"
+        for u in range(num_users) for i in range(items_per_user)
+    ]
+    path.write_text("\n".join(rows))
+
+
+def test_build_dataset_bundle_persists_split_when_store_dir_set(tmp_path):
+    raw_path = tmp_path / "u.data"
+    _write_ml100k_style(raw_path)
+    store_dir = tmp_path / "splits" / "ml100k"
+    config = DatasetConfig(
+        name="ml100k", loader="ml100k", raw_path=str(raw_path),
+        split=SplitConfig(strategy="random", val_size=0.1, test_size=0.2, random_state=200, store_dir=str(store_dir)),
+    )
+
+    assert not store_dir.exists()
+    build_dataset_bundle(config)
+
+    assert (store_dir / "train.csv").exists()
+    assert (store_dir / "val.csv").exists()
+    assert (store_dir / "test.csv").exists()
+    assert (store_dir / "split_meta.json").exists()
+
+
+def test_build_dataset_bundle_reuses_persisted_split_instead_of_recomputing(tmp_path):
+    raw_path = tmp_path / "u.data"
+    _write_ml100k_style(raw_path)
+    store_dir = tmp_path / "splits" / "ml100k"
+    config = DatasetConfig(
+        name="ml100k", loader="ml100k", raw_path=str(raw_path),
+        split=SplitConfig(strategy="random", val_size=0.1, test_size=0.2, random_state=200, store_dir=str(store_dir)),
+    )
+    first = build_dataset_bundle(config)
+
+    # The raw file is gone -- if the second call still succeeds and matches, it must have
+    # come from the persisted split, not a recomputation from raw data.
+    raw_path.unlink()
+    second = build_dataset_bundle(config)
+
+    pd.testing.assert_frame_equal(first.train, second.train)
+    pd.testing.assert_frame_equal(first.val, second.val)
+    pd.testing.assert_frame_equal(first.test, second.test)
+    assert first.num_users == second.num_users
+    assert first.num_items == second.num_items
+
+
+def test_build_dataset_bundle_rejects_persisted_split_from_different_settings(tmp_path):
+    raw_path = tmp_path / "u.data"
+    _write_ml100k_style(raw_path)
+    store_dir = tmp_path / "splits" / "ml100k"
+    config = DatasetConfig(
+        name="ml100k", loader="ml100k", raw_path=str(raw_path),
+        split=SplitConfig(strategy="random", val_size=0.1, test_size=0.2, random_state=200, store_dir=str(store_dir)),
+    )
+    build_dataset_bundle(config)
+
+    drifted = config.model_copy(update={
+        "split": config.split.model_copy(update={"random_state": 999}),
+    })
+    with pytest.raises(ValueError, match="different settings"):
+        build_dataset_bundle(drifted)

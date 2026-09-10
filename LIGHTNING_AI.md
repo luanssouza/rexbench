@@ -47,6 +47,20 @@ Two things worth knowing before you start:
    laptop, especially for LastFM1K (2.4GB). `data/raw/` is gitignored by design, so this is a
    one-time step per Studio, not something that travels with the repo.
 
+6b. **(Recommended) Bring your own pre-split data instead of re-splitting on the Studio.**
+   Every config's datasets set `split.store_dir: data/splits/...` (see README.md's "Persisted
+   splits" section) — if you already ran `rexbench split --config configs/tier1.yaml`
+   locally, `rsync` the result up instead of trusting the Studio to re-derive byte-identical
+   splits from its own copy of the raw data:
+   ```bash
+   rsync -avz data/splits/ my-studio:rexbench/data/splits/
+   ```
+   If you skip this, the first `rexbench run`/`rexbench split` on the Studio just computes
+   and persists the split there itself — still fully reproducible (deterministic given the
+   same raw file + config), just not guaranteed byte-identical to a split computed on a
+   different machine/pandas version. Either way, once `data/splits/<name>/` exists anywhere,
+   every later run against that `store_dir` reuses it verbatim rather than recomputing.
+
 7. **Run the smoke test first**, before spending real compute on a full config:
    ```bash
    rexbench run --config configs/smoke_test.yaml

@@ -29,7 +29,7 @@ datasets:
     loader: ml100k
     raw_path: data/raw/ml100k/u.data
     sample: {max_users: 100, max_interactions_per_user: 30, seed: 200}
-    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200}
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/smoke_test/ml100k}
     topk: [5, 10]
     tail_fraction: 0.20
     kg: {status: available, source_dir: data/raw/pgpr_kg/ml100k}
@@ -38,7 +38,7 @@ datasets:
     loader: ml1m
     raw_path: data/raw/ml1m/ratings.dat
     sample: {max_users: 100, max_interactions_per_user: 30, seed: 200}
-    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200}
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/smoke_test/ml1m}
     topk: [5, 10]
     tail_fraction: 0.20
     kg: {status: available, source_dir: data/raw/pgpr_kg/ml1m}
@@ -47,7 +47,7 @@ datasets:
     loader: coat
     raw_path: {train: data/raw/coat/train.ascii, test: data/raw/coat/test.ascii}
     sample: {max_users: 100, max_interactions_per_user: 30, seed: 200}
-    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200}
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/smoke_test/coat}
     topk: [5, 10]
     tail_fraction: 0.20
     kg: {status: needs_construction}
@@ -56,7 +56,7 @@ datasets:
     loader: electronics
     raw_path: data/raw/electronics/df_electronics.csv
     sample: {max_users: 100, max_interactions_per_user: 30, seed: 200}
-    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200}
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/smoke_test/electronics}
     topk: [5, 10]
     tail_fraction: 0.20
     kg: {status: needs_construction}
@@ -65,7 +65,7 @@ datasets:
     loader: rentrunway
     raw_path: data/raw/rentrunway/renttherunway_final_data.json
     sample: {max_users: 100, max_interactions_per_user: 30, seed: 200}
-    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200}
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/smoke_test/rentrunway}
     topk: [5, 10]
     tail_fraction: 0.20
     kg: {status: needs_construction}
@@ -74,7 +74,7 @@ datasets:
     loader: ambar
     raw_path: data/raw/ambar/ratings_info.csv
     sample: {max_users: 100, max_interactions_per_user: 30, seed: 200}
-    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200}
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/smoke_test/ambar}
     topk: [5, 10]
     tail_fraction: 0.20
     kg: {status: needs_construction}
@@ -83,7 +83,7 @@ datasets:
     loader: lastfm1k
     raw_path: data/raw/lastfm1k/userid-timestamp-artid-artname-traid-traname.tsv
     sample: {max_users: 100, max_interactions_per_user: 30, seed: 200}
-    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200}
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/smoke_test/lastfm1k}
     topk: [5, 10]
     tail_fraction: 0.20
     kg: {status: needs_construction}
@@ -92,7 +92,7 @@ datasets:
     loader: amazon_digital_music
     raw_path: data/raw/amazon_digital_music/Digital_Music.jsonl
     sample: {max_users: 100, max_interactions_per_user: 30, seed: 200}
-    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200}
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/smoke_test/amazon_digital_music}
     topk: [5, 10]
     tail_fraction: 0.20
     kg: {status: unsupported}

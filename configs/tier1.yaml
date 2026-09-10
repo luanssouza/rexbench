@@ -15,7 +15,7 @@ datasets:
   - name: ml100k
     loader: ml100k
     raw_path: data/raw/ml100k/u.data
-    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200}
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/ml100k}
     topk: [5, 10]
     tail_fraction: 0.20
     kg: {status: available, source_dir: data/raw/pgpr_kg/ml100k}
@@ -23,7 +23,7 @@ datasets:
   - name: ml1m
     loader: ml1m
     raw_path: data/raw/ml1m/ratings.dat
-    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200}
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/ml1m}
     topk: [5, 10]
     tail_fraction: 0.20
     kg: {status: available, source_dir: data/raw/pgpr_kg/ml1m}
@@ -31,7 +31,7 @@ datasets:
   - name: coat
     loader: coat
     raw_path: {train: data/raw/coat/train.ascii, test: data/raw/coat/test.ascii}
-    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200}
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/coat}
     topk: [5, 10]
     tail_fraction: 0.20
     kg: {status: needs_construction}  # item_features_map.txt has gender/jackettype/color, no extractor yet
@@ -39,7 +39,7 @@ datasets:
   - name: electronics
     loader: electronics
     raw_path: data/raw/electronics/df_electronics.csv
-    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200}
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/electronics}
     topk: [5, 10]
     tail_fraction: 0.20
     kg: {status: needs_construction}  # category/brand/model_attr present, no extractor yet
@@ -47,7 +47,7 @@ datasets:
   - name: rentrunway
     loader: rentrunway
     raw_path: data/raw/rentrunway/renttherunway_final_data.json
-    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200}
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/rentrunway}
     topk: [5, 10]
     tail_fraction: 0.20
     kg: {status: needs_construction}  # category/fit/size present, no extractor yet
@@ -55,7 +55,7 @@ datasets:
   - name: ambar
     loader: ambar
     raw_path: data/raw/ambar/ratings_info.csv
-    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200}
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/ambar}
     topk: [5, 10]
     tail_fraction: 0.20
     kg: {status: needs_construction}  # separate artists_info.csv/tracks_info.csv entity tables, no extractor yet
@@ -63,7 +63,7 @@ datasets:
   - name: lastfm1k
     loader: lastfm1k
     raw_path: data/raw/lastfm1k/userid-timestamp-artid-artname-traid-traname.tsv
-    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200}
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/lastfm1k}
     topk: [5, 10]
     tail_fraction: 0.20
     kg: {status: needs_construction}  # PGPR's own KG relation registry already defines a LASTFM_KG_RELATION schema, but no KG data files exist yet
@@ -71,7 +71,7 @@ datasets:
   - name: amazon_digital_music
     loader: amazon_digital_music
     raw_path: data/raw/amazon_digital_music/Digital_Music.jsonl
-    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200}
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/amazon_digital_music}
     topk: [5, 10]
     tail_fraction: 0.20
     kg: {status: unsupported}  # review text/ratings only, no structured entity fields
