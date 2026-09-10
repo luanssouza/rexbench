@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+import numpy as np
 import pandas as pd
 
 from rexbench.config.schema import DatasetConfig
@@ -135,7 +136,43 @@ def load_raw(config: DatasetConfig) -> pd.DataFrame:
         df = df.assign(rating=1.0)
     if "timestamp" not in df.columns:
         df = df.assign(timestamp=0)
-    return df[CANONICAL_COLUMNS].reset_index(drop=True)
+    df = df[CANONICAL_COLUMNS].reset_index(drop=True)
+    if config.sample.max_users is not None:
+        df = _subsample_users(df, config.sample.max_users, config.sample.seed)
+    if config.sample.max_interactions_per_user is not None:
+        df = _cap_interactions_per_user(df, config.sample.max_interactions_per_user, config.sample.seed)
+    return df
+
+
+def _subsample_users(df: pd.DataFrame, max_users: int, seed: int) -> pd.DataFrame:
+    """Keeps every interaction of a random `max_users` users, dropping the rest entirely —
+    not a random row sample. Preserves each kept user's real interaction count, so EBPR's
+    sparsity precondition behaves the same way on the sample as on the full dataset. A pure
+    row sample would instead spread thin across every user, starving per-user density for
+    reasons that have nothing to do with the real dataset. Does NOT by itself bound the item
+    catalog for datasets where individual users are extremely active (see
+    _cap_interactions_per_user) — verified empirically that 150 lastfm1k users still touch
+    334,000 distinct items on their own."""
+    users = df["user_id"].unique()
+    if len(users) <= max_users:
+        return df
+    rng = np.random.default_rng(seed)
+    chosen = rng.choice(users, size=max_users, replace=False)
+    return df[df["user_id"].isin(chosen)].reset_index(drop=True)
+
+
+def _cap_interactions_per_user(df: pd.DataFrame, max_interactions_per_user: int, seed: int) -> pd.DataFrame:
+    """Keeps at most `max_interactions_per_user` random rows per user — the mechanism that
+    actually bounds the item catalog for datasets like lastfm1k (huge per-user interaction
+    counts), where _subsample_users alone doesn't: worst case the catalog is bounded by
+    max_users * max_interactions_per_user, not by however many items a handful of very
+    active users happen to have touched historically. Shuffle-then-head rather than a
+    groupby().apply(lambda g: g.sample(...)) — the latter hits pandas' newer
+    include_groups behavior (the grouping column can be dropped from the group passed to
+    the lambda depending on pandas version), which is exactly the kind of version-fragility
+    this pipeline elsewhere avoids by construction."""
+    shuffled = df.sample(frac=1.0, random_state=seed).reset_index(drop=True)
+    return shuffled.groupby("user_id", group_keys=False).head(max_interactions_per_user).reset_index(drop=True)
 
 
 @dataclass(frozen=True)

@@ -47,7 +47,19 @@ Two things worth knowing before you start:
    laptop, especially for LastFM1K (2.4GB). `data/raw/` is gitignored by design, so this is a
    one-time step per Studio, not something that travels with the repo.
 
-7. **Run**:
+7. **Run the smoke test first**, before spending real compute on a full config:
+   ```bash
+   rexbench run --config configs/smoke_test.yaml
+   ```
+   Every model we have (EBPR family, PGPR, all 5 Tier-2 baselines, AR/KNN explainers) on
+   every dataset, sampled down to ~100 users each (see `configs/smoke_test.yaml`'s comments)
+   — this confirms the whole environment/pipeline actually runs end-to-end on the new
+   Studio, in minutes rather than hours, before you commit to a real run. Note PGPR still
+   trains on its full on-disk ml100k/ml1m data even here (it doesn't use the sample — a
+   disclosed, pre-existing scope limitation, see `REGISTRY.md`), just with 1 epoch instead
+   of 30/50, so it's faster but not tiny like everything else.
+
+   Once that's clean, run for real:
    ```bash
    rexbench run --config configs/tier1.yaml        # EBPR family + PGPR only
    rexbench run --config configs/hpo_example.yaml  # + HPO search on EBPR

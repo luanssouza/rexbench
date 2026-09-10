@@ -50,6 +50,29 @@ class KgConfig(Frozen):
     source_dir: str | None = None
 
 
+class SampleConfig(Frozen):
+    """Smoke-test knob: subsample to at most `max_users` real users before anything else
+    touches the raw data — core/dataset.py's build_dataset_bundle applies this first.
+    Sampling by user rather than by row preserves each remaining user's actual interaction
+    count, so EBPR's sparsity precondition behaves the same way on the sample as on the full
+    dataset instead of artificially starving every user down to ~0 interactions.
+
+    `max_interactions_per_user` additionally caps each kept user to at most that many
+    interactions (a random subset of their own rows) — required for datasets like lastfm1k
+    where per-user interaction counts are enormous (median ~10,000 listening events):
+    verified that 150 sampled users there still touch 334,000 distinct items on their own
+    (~900GB for EBPR's item x item similarity matrix) without this second cap, because
+    max_users alone doesn't bound catalog size when individual users are this active. Leave
+    unset for datasets where max_users alone is already enough (most of them).
+
+    This is pure pipeline-level data reduction for testing — it never touches any model's
+    training/scoring code, so it doesn't fall under "changing method behavior."
+    """
+    max_users: int | None = None
+    max_interactions_per_user: int | None = None
+    seed: int = 200
+
+
 class DatasetConfig(Frozen):
     name: str
     loader: str
@@ -59,6 +82,7 @@ class DatasetConfig(Frozen):
     topk: list[int] = Field(default_factory=lambda: [5, 10])
     tail_fraction: float = 0.20
     kg: KgConfig = KgConfig(status="unsupported")
+    sample: SampleConfig = SampleConfig()
 
     @model_validator(mode="after")
     def _validate_kg(self) -> "DatasetConfig":

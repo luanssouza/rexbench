@@ -177,12 +177,24 @@ Key properties:
 ## Running
 
 ```bash
+rexbench run --config configs/smoke_test.yaml  # everything we have, sampled tiny — run this first
 rexbench run --config configs/tier1.yaml       # EBPR family + PGPR only
 rexbench run --config configs/full.yaml        # + Tier 2 baselines + AR/KNN explainers
 rexbench run --config configs/hpo_example.yaml # tier1.yaml + HPO search on EBPR
 rexbench aggregate --run outputs/<run_id>
 rexbench stats --run outputs/<run_id>
 ```
+
+`DatasetConfig.sample` (`max_users`, `max_interactions_per_user`) is what makes
+`smoke_test.yaml` small — pure pipeline-level data reduction in `core/dataset.py`, applied
+before anything touches a model, so it never counts as changing a method's behavior.
+Sampling by user (not by row) preserves each kept user's real interaction count, so a
+dataset's sparsity character survives at the smaller scale — confirmed empirically:
+`electronics`/`rentrunway` still show as clearly sparse after sampling, matching their
+full-scale proportions. `max_interactions_per_user` exists specifically because
+`max_users` alone doesn't bound the item catalog for datasets with huge per-user activity —
+verified that 150 sampled `lastfm1k` users still touched 334,000 distinct items on their
+own (~900GB for EBPR's item×item similarity matrix) without it.
 
 Each run writes `outputs/<run_id>/`: `config.yaml` (copied verbatim), `manifest.json` (git
 commit, library versions, hardware, disclosed corrections), `results.parquet`/`.csv` (long

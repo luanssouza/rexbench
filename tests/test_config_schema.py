@@ -21,6 +21,15 @@ def test_minimal_config_round_trips():
     assert cfg.experiment.name == "t"
     assert cfg.datasets[0].split.random_state == 200  # declared default, not a bare constant elsewhere
     assert cfg.datasets[0].topk == [5, 10]
+    assert cfg.datasets[0].sample.max_users is None  # no sampling unless explicitly configured
+
+
+def test_dataset_sample_config_resolves():
+    d = _minimal_config_dict()
+    d["datasets"][0]["sample"] = {"max_users": 100, "seed": 7}
+    cfg = ExperimentConfig.model_validate(d)
+    assert cfg.datasets[0].sample.max_users == 100
+    assert cfg.datasets[0].sample.seed == 7
 
 
 def test_ebpr_requires_variant():
