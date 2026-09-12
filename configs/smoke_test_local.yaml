@@ -1,0 +1,213 @@
+# Same as configs/smoke_test.yaml, except raw_path points directly at the datasets already
+# sitting on this machine under ../datasets/ (sibling of the rexbench repo root) instead of
+# rexbench's own data/raw/ convention -- so you don't have to copy/re-download anything just
+# to materialize a split locally.
+#
+# Intended workflow:
+#   1. rexbench split --config configs/smoke_test_local.yaml
+#      -> writes data/splits/smoke_test/<dataset>/{train,val,test}.csv + split_meta.json,
+#         reading straight from ../datasets/...
+#   2. rsync -avz data/splits/ my-studio:rexbench/data/splits/
+#   3. On the Studio, `rexbench run --config configs/smoke_test.yaml` loads those exact
+#      persisted files -- raw_path differing between this config and smoke_test.yaml
+#      (../datasets/... here vs data/raw/... there) does NOT matter: only split/sample
+#      settings are enforced when reusing a persisted split (see README.md's "Persisted
+#      splits" section), and both configs use identical values for those. store_dir is
+#      deliberately the same path as smoke_test.yaml's for exactly this reason.
+#
+# Run from the rexbench repo root: `rexbench split --config configs/smoke_test_local.yaml`
+
+experiment:
+  name: smoke_test_local
+  output_dir: rexbench/outputs
+
+determinism:
+  seeds: [2020]
+  reproducibility: true
+  device: auto
+
+datasets:
+  - name: ml100k
+    loader: ml100k
+    raw_path: ../datasets/ML100K/ml-100k/u.data
+    sample: {max_users: 100, max_interactions_per_user: 30, seed: 200}
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/smoke_test/ml100k}
+    topk: [5, 10]
+    tail_fraction: 0.20
+    kg: {status: available, source_dir: data/raw/pgpr_kg/ml100k}
+
+  - name: ml1m
+    loader: ml1m
+    raw_path: ../datasets/ML1M/ml-1m/ratings.dat
+    sample: {max_users: 100, max_interactions_per_user: 30, seed: 200}
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/smoke_test/ml1m}
+    topk: [5, 10]
+    tail_fraction: 0.20
+    kg: {status: available, source_dir: data/raw/pgpr_kg/ml1m}
+
+  - name: coat
+    loader: coat
+    raw_path: {train: ../datasets/Coat/train.ascii, test: ../datasets/Coat/test.ascii}
+    sample: {max_users: 100, max_interactions_per_user: 30, seed: 200}
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/smoke_test/coat}
+    topk: [5, 10]
+    tail_fraction: 0.20
+    kg: {status: needs_construction}
+
+  - name: electronics
+    loader: electronics
+    raw_path: ../datasets/MarketBias/df_electronics.csv
+    sample: {max_users: 100, max_interactions_per_user: 30, seed: 200}
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/smoke_test/electronics}
+    topk: [5, 10]
+    tail_fraction: 0.20
+    kg: {status: needs_construction}
+
+  - name: rentrunway
+    loader: rentrunway
+    raw_path: ../datasets/Clothes/renttherunway_final_data.json
+    sample: {max_users: 100, max_interactions_per_user: 30, seed: 200}
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/smoke_test/rentrunway}
+    topk: [5, 10]
+    tail_fraction: 0.20
+    kg: {status: needs_construction}
+
+  - name: ambar
+    loader: ambar
+    raw_path: ../datasets/AMBAR/data/AMBAR/ratings_info.csv
+    sample: {max_users: 100, max_interactions_per_user: 30, seed: 200}
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/smoke_test/ambar}
+    topk: [5, 10]
+    tail_fraction: 0.20
+    kg: {status: needs_construction}
+
+  - name: lastfm1k
+    loader: lastfm1k
+    raw_path: ../datasets/LastFM1K/lastfm-dataset-1K/userid-timestamp-artid-artname-traid-traname.tsv
+    sample: {max_users: 100, max_interactions_per_user: 30, seed: 200}
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/smoke_test/lastfm1k}
+    topk: [5, 10]
+    tail_fraction: 0.20
+    kg: {status: needs_construction}
+
+  - name: amazon_digital_music
+    loader: amazon_digital_music
+    raw_path: ../datasets/Amazon/Digital_Music.jsonl
+    sample: {max_users: 100, max_interactions_per_user: 30, seed: 200}
+    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/smoke_test/amazon_digital_music}
+    topk: [5, 10]
+    tail_fraction: 0.20
+    kg: {status: unsupported}
+
+models:
+  # EBPR family (Tier 1, required). Sampling preserves each dataset's real sparsity
+  # proportion, so electronics/rentrunway/amazon_digital_music still need the lower
+  # precondition floor + smaller neighborhood, same as tier1.yaml/full.yaml.
+  - name: EBPR
+    tier: 1
+    adapter: ebpr
+    variant: EBPR
+    applies_to: all_datasets
+    hyperparameters: {num_epoch: 2, batch_size: 32, lr: 0.001, num_latent: 4, neighborhood: 5, optimizer: adam}
+    precondition: {min_fraction_users_with_2plus: 0.5}
+    dataset_overrides: &sparse_ebpr_overrides
+      electronics:
+        hyperparameters: {num_epoch: 2, batch_size: 32, lr: 0.001, num_latent: 4, neighborhood: 3, optimizer: adam}
+        precondition: {min_fraction_users_with_2plus: 0.05}
+      rentrunway:
+        hyperparameters: {num_epoch: 2, batch_size: 32, lr: 0.001, num_latent: 4, neighborhood: 3, optimizer: adam}
+        precondition: {min_fraction_users_with_2plus: 0.05}
+      amazon_digital_music:
+        hyperparameters: {num_epoch: 2, batch_size: 32, lr: 0.001, num_latent: 4, neighborhood: 3, optimizer: adam}
+        precondition: {min_fraction_users_with_2plus: 0.05}
+
+  - name: UBPR
+    tier: 1
+    adapter: ebpr
+    variant: UBPR
+    applies_to: all_datasets
+    hyperparameters: {num_epoch: 2, batch_size: 32, lr: 0.001, num_latent: 4, neighborhood: 5, optimizer: adam}
+    precondition: {min_fraction_users_with_2plus: 0.5}
+    dataset_overrides: *sparse_ebpr_overrides
+
+  - name: UEBPR
+    tier: 1
+    adapter: ebpr
+    variant: UEBPR
+    applies_to: all_datasets
+    hyperparameters: {num_epoch: 2, batch_size: 32, lr: 0.001, num_latent: 4, neighborhood: 5, optimizer: adam}
+    precondition: {min_fraction_users_with_2plus: 0.5}
+    dataset_overrides: *sparse_ebpr_overrides
+
+  # PGPR (Tier 1, required). Does NOT use `sample` — trains on its own pre-existing
+  # on-disk ml100k/ml1m data regardless (disclosed scope limitation, REGISTRY.md) — so this
+  # is "small" only in the sense of 1 epoch each, not a reduced dataset. Still the two only
+  # datasets with an available KG.
+  - name: PGPR
+    tier: 1
+    adapter: pgpr
+    applies_to: [ml100k, ml1m]
+    hyperparameters: {transe_epochs: 1, transe_batch_size: 32, agent_epochs: 1, agent_batch_size: 16}
+    precondition: {min_kg_triples: 1000}
+
+  # Tier 2 baselines — embedding/batched, no O(items^2) matrix, so `sample` alone (no
+  # dataset_overrides needed) keeps these fast everywhere.
+  - name: Pop
+    tier: 2
+    adapter: recbole
+    recbole_model: Pop
+    applies_to: all_datasets
+    hyperparameters: {epochs: 1}
+
+  - name: BPR
+    tier: 2
+    adapter: recbole
+    recbole_model: BPR
+    applies_to: all_datasets
+    hyperparameters: {epochs: 1}
+
+  - name: MultiVAE
+    tier: 2
+    adapter: recbole
+    recbole_model: MultiVAE
+    applies_to: all_datasets
+    hyperparameters: {epochs: 1}
+
+  - name: NeuMF
+    tier: 2
+    adapter: recbole
+    recbole_model: NeuMF
+    applies_to: all_datasets
+    hyperparameters: {epochs: 1}
+
+  - name: SLIM
+    tier: 2
+    adapter: recbole
+    recbole_model: SLIMElastic
+    applies_to: all_datasets
+    hyperparameters: {epochs: 1}
+
+explainers:
+  - name: AR
+    adapter: recoxplainer_ar
+    applies_to_models: [Pop, BPR, MultiVAE, NeuMF, SLIM]
+    hyperparameters:
+      min_support: 0.001
+      max_len: 2
+      metric: lift
+      min_threshold: 0.001
+      min_confidence: 0.001
+      min_lift: 0.001
+
+  - name: KNN
+    adapter: recoxplainer_knn
+    applies_to_models: [Pop, BPR, MultiVAE, NeuMF, SLIM]
+    hyperparameters: {knn: 5}
+
+metrics:
+  accuracy: [ndcg, map]
+  fairness: [gini, variance, entropy, arp, arp_normalized, tail_coverage]
+
+statistics:
+  tests: [friedman, quade, nemenyi, kendall_w]
+  alpha: 0.05

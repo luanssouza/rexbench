@@ -252,11 +252,26 @@ SPLIT_META_FILENAME = "split_meta.json"
 
 
 def _split_meta(config: DatasetConfig) -> dict:
-    """Everything that determines the exact contents of a materialized split. Compared
-    against the stored meta on load so a persisted split silently reused from a differently
-    configured run is a loud error, not a silent correctness bug."""
+    """Recorded alongside a materialized split for human debugging. `raw_path` is informational
+    only -- see _split_settings for what's actually enforced on load."""
     return {
         "raw_path": config.raw_path,
+        **_split_settings(config),
+    }
+
+
+def _split_settings(config: DatasetConfig) -> dict:
+    """The subset of _split_meta that actually determines a persisted split's row content,
+    given the same underlying dataset. Compared strictly against the stored meta on load so
+    a persisted split silently reused from a differently configured run is a loud error, not
+    a silent correctness bug.
+
+    Deliberately excludes `raw_path`: the whole point of persisting a split is to reuse it on
+    a *different machine*, where the same logical dataset legitimately lives at a different
+    path (e.g. a laptop's `../datasets/ML100K/...` vs a Lightning AI Studio's
+    `data/raw/ml100k/...`) -- without needing the raw file to be present there at all.
+    Enforcing raw_path equality would defeat that exact use case."""
+    return {
         "split": {
             "strategy": config.split.strategy,
             "val_size": config.split.val_size,
@@ -296,13 +311,14 @@ def _load_persisted_split(
         return None
 
     stored_meta = json.loads(meta_path.read_text())
-    current_meta = _split_meta(config)
-    if stored_meta != current_meta:
+    stored_settings = {k: v for k, v in stored_meta.items() if k != "raw_path"}
+    current_settings = _split_settings(config)
+    if stored_settings != current_settings:
         raise ValueError(
-            f"persisted split at {store_dir} was computed from different settings than the "
-            f"dataset config using it now (stored: {stored_meta!r}, current: {current_meta!r}). "
-            f"Refusing to silently reuse a mismatched split -- delete {store_dir} to let it "
-            f"recompute, or point split.store_dir somewhere else."
+            f"persisted split at {store_dir} was computed from different settings (split/sample) "
+            f"than the dataset config using it now (stored: {stored_settings!r}, current: "
+            f"{current_settings!r}). Refusing to silently reuse a mismatched split -- delete "
+            f"{store_dir} to let it recompute, or point split.store_dir somewhere else."
         )
     return tuple(pd.read_csv(p) for p in paths.values())  # type: ignore[return-value]
 

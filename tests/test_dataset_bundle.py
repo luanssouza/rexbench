@@ -195,3 +195,27 @@ def test_build_dataset_bundle_rejects_persisted_split_from_different_settings(tm
     })
     with pytest.raises(ValueError, match="different settings"):
         build_dataset_bundle(drifted)
+
+
+def test_build_dataset_bundle_ignores_raw_path_when_reusing_persisted_split(tmp_path):
+    """A different raw_path (e.g. a laptop's dataset folder vs a Studio's data/raw/...) must
+    NOT block reusing a persisted split -- that cross-machine reuse is the entire point of
+    split.store_dir. Only the split/sample settings that determine row content are enforced."""
+    raw_path = tmp_path / "u.data"
+    _write_ml100k_style(raw_path)
+    store_dir = tmp_path / "splits" / "ml100k"
+    config = DatasetConfig(
+        name="ml100k", loader="ml100k", raw_path=str(raw_path),
+        split=SplitConfig(strategy="random", val_size=0.1, test_size=0.2, random_state=200, store_dir=str(store_dir)),
+    )
+    first = build_dataset_bundle(config)
+
+    other_raw_path = tmp_path / "elsewhere" / "u.data"
+    other_raw_path.parent.mkdir()
+    _write_ml100k_style(other_raw_path)
+    same_split_different_path = config.model_copy(update={"raw_path": str(other_raw_path)})
+    second = build_dataset_bundle(same_split_different_path)
+
+    pd.testing.assert_frame_equal(first.train, second.train)
+    pd.testing.assert_frame_equal(first.val, second.val)
+    pd.testing.assert_frame_equal(first.test, second.test)

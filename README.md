@@ -195,10 +195,14 @@ same `data/splits/<name>` (they share identical split settings, so the same mate
 split is correct for all three); `configs/smoke_test.yaml` uses `data/splits/smoke_test/<name>`
 so its sampled split can never collide with a full-scale one at the same path.
 
-If something *is* already persisted at `store_dir` but was computed under different split
-settings than the config now pointing at it, loading raises immediately rather than silently
-reusing a mismatched split (`split_meta.json` is compared field-by-field — see
-`core/dataset.py`'s `_split_meta`/`_load_persisted_split`).
+If something *is* already persisted at `store_dir` but was computed under different
+`split`/`sample` settings than the config now pointing at it, loading raises immediately
+rather than silently reusing a mismatched split — see `core/dataset.py`'s
+`_split_settings`/`_load_persisted_split`. `raw_path` is deliberately **not** part of that
+check: it's recorded in `split_meta.json` for human debugging, but two configs pointing at
+the same logical dataset via different paths (a laptop's dataset folder vs. a Studio's
+`data/raw/...`) are expected and must not block reuse — that cross-machine case is the
+entire reason this feature exists.
 
 **Workflow** — split locally once, run the identical split anywhere:
 ```bash
