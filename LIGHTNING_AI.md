@@ -7,7 +7,8 @@ Two things worth knowing before you start:
 - EBPR's dense co-occurrence matrix (`create_explainability_matrix`) is built in **CPU RAM**,
   not on the GPU — pick a Studio machine with enough memory, not just a big GPU.
 - PGPR's knowledge-graph data still has no verified download source (see `REGISTRY.md`) —
-  bring your own copy if you have one.
+  bring your own copy if you have one, staged locally with `rexbench stage-pgpr-kg` (step 6c
+  below) and synced up the same way as the splits.
 
 ## Steps
 
@@ -61,6 +62,20 @@ Two things worth knowing before you start:
    different machine/pandas version. Either way, once `data/splits/<name>/` exists anywhere,
    every later run against that `store_dir` reuses it verbatim rather than recomputing.
 
+6c. **PGPR needs its own KG dataset too — separate from the split above.** PGPR doesn't use
+   `DatasetBundle`'s split at all (a disclosed scope limitation, see `REGISTRY.md`); it trains
+   on its own pre-existing `entities/`/`relations/`/`mappings/`/`train.txt`/`test.txt` layout
+   (`data/README.md`'s PGPR row). If you already have that data locally, stage it into
+   rexbench's own `data/raw/pgpr_kg/<dataset>` (validated, refuses an incomplete copy) and
+   sync it up the same way as the splits:
+   ```bash
+   rexbench stage-pgpr-kg --source /path/to/your/ml100k --dataset ml100k
+   rexbench stage-pgpr-kg --source /path/to/your/ml1m --dataset ml1m
+   rsync -avz data/raw/pgpr_kg/ my-studio:rexbench/data/raw/pgpr_kg/
+   ```
+   Without this, PGPR just shows up as a `precondition-unmet` failure row on the Studio — it
+   won't block the rest of the run.
+
 7. **Run the smoke test first**, before spending real compute on a full config:
    ```bash
    rexbench run --config configs/smoke_test.yaml
@@ -68,10 +83,9 @@ Two things worth knowing before you start:
    Every model we have (EBPR family, PGPR, all 5 Tier-2 baselines, AR/KNN explainers) on
    every dataset, sampled down to ~100 users each (see `configs/smoke_test.yaml`'s comments)
    — this confirms the whole environment/pipeline actually runs end-to-end on the new
-   Studio, in minutes rather than hours, before you commit to a real run. Note PGPR still
-   trains on its full on-disk ml100k/ml1m data even here (it doesn't use the sample — a
-   disclosed, pre-existing scope limitation, see `REGISTRY.md`), just with 1 epoch instead
-   of 30/50, so it's faster but not tiny like everything else.
+   Studio, in minutes rather than hours, before you commit to a real run. PGPR now respects
+   the sample too (it regenerates its own train/test files from `dataset.train`/`.val`/
+   `.test` — see `REGISTRY.md`), combined with 1 epoch instead of 30/50.
 
    Once that's clean, run for real:
    ```bash

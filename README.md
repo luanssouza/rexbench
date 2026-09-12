@@ -119,14 +119,29 @@ addressed (pin updated / adapter default fixed), documented there in full.
 
 ## Known scope limitations
 
-- **PGPR's train/test split is not rexbench's `DatasetBundle` split.** PGPR's own
-  preprocessing pipeline has no parameterizable entry point for an arbitrary split — see
-  `REGISTRY.md`. It's the one model not guaranteed to share exact train/test rows with every
-  other model on the same dataset.
+- **RESOLVED: PGPR's train/test split now matches `DatasetBundle`.** `fit()` regenerates
+  PGPR's `train.txt`/`test.txt` from `dataset.train`+`dataset.val` (merged — PGPR has no
+  validation concept, and isn't wired into HPO) and `dataset.test`, translated to PGPR's own
+  raw MovieLens ids. PGPR now shares the exact same test rows as every other model, and (as
+  a side effect) also respects `SampleConfig` for smoke tests — see `REGISTRY.md` for the
+  full writeup, including a real bug found and fixed along the way (`DATASET_DIR` was being
+  pointed at the wrong on-disk location entirely).
 - **PGPR runs on ML100K/ML1M only.** The other 6 datasets need a KG-construction step that
   doesn't exist yet — see `REGISTRY.md` for the per-dataset breakdown and rough cost estimate.
 - **PGPR's knowledge-graph data has no verified canonical download source** — see
-  `REGISTRY.md` and `data/README.md`.
+  `REGISTRY.md` and `data/README.md`. If you already have it from prior work,
+  `rexbench stage-pgpr-kg --source <dir> --dataset ml100k` (or `ml1m`) copies it into
+  rexbench's own `data/raw/pgpr_kg/<dataset>` with validation, so it travels with the rest of
+  `data/raw/` when you sync to another machine.
+- **BUGFIX**: `PGPRModelAdapter`'s precondition check used to count KG triples from
+  `kg_final.txt` alone — verified against the vendored source that PGPR's own training code
+  (`data_utils.py`/`knowledge_graph.py`) never actually reads that file, only
+  `entities/`/`relations/`. `kg_final.txt`/`e_map.txt`/`r_map.txt` turn out to be leftover
+  artifacts from an unrelated joint-kg/KGAT conversion, present for ml100k but not ml1m —
+  the old check made ml1m look like it had zero KG triples and would have failed its
+  precondition for no real reason. Fixed to count real triples from `relations/*.txt(.gz)`
+  directly, falling back to the old `kg_final.txt` behavior only if no `relations/` dir
+  exists at all.
 
 ## Fixed: RecBole was not using the exact rexbench split
 
@@ -232,6 +247,7 @@ between machines by hand (`rsync`/`scp`/the Studio's file browser), never via gi
 
 ```bash
 rexbench split --config configs/tier1.yaml     # materialize data/splits/* (see above) -- optional, skip if no dataset sets store_dir
+rexbench stage-pgpr-kg --source <dir> --dataset ml100k  # copy PGPR's own KG data into data/raw/pgpr_kg/ml100k -- optional, only needed for PGPR
 rexbench run --config configs/smoke_test.yaml  # everything we have, sampled tiny — run this first
 rexbench run --config configs/tier1.yaml       # EBPR family + PGPR only
 rexbench run --config configs/full.yaml        # + Tier 2 baselines + AR/KNN explainers

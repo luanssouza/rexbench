@@ -73,6 +73,39 @@ def cmd_split(args: argparse.Namespace) -> None:
         )
 
 
+_PGPR_KG_REQUIRED = ["entities", "relations", "mappings", "train.txt", "test.txt"]
+
+
+def cmd_stage_pgpr_kg(args: argparse.Namespace) -> None:
+    """Copies PGPR's own pre-existing KG dataset format (entities/, relations/, mappings/,
+    train.txt, test.txt -- see data/README.md's PGPR row) from wherever you already have it
+    on this machine into rexbench's own data/raw/pgpr_kg/<dataset>, so it's gitignored and
+    travels alongside data/raw/ and data/splits/ the same way when you rsync to another
+    machine (e.g. a Lightning AI Studio).
+
+    Unlike `rexbench split`, this isn't a rexbench-computed artifact -- PGPR doesn't use
+    DatasetBundle's split/sample mechanism at all (a disclosed scope limitation, see
+    REGISTRY.md), it trains on its own pre-existing, pre-split data verbatim. This command
+    is a plain validated copy, not a recomputation, so there's nothing to "reuse vs.
+    recompute" here the way there is for rexbench split -- it either finds a complete source
+    directory and copies it, or refuses and tells you what's missing."""
+    source = Path(args.source)
+    missing = [name for name in _PGPR_KG_REQUIRED if not (source / name).exists()]
+    if missing:
+        raise SystemExit(
+            f"{source} is missing expected PGPR KG files/dirs: {missing} "
+            f"(see data/README.md's PGPR row for the full expected layout) -- refusing to "
+            f"stage an incomplete copy."
+        )
+    dest = Path("data") / "raw" / "pgpr_kg" / args.dataset
+    if dest.exists():
+        print(f"{dest} already exists, leaving it as-is (delete it first to re-stage from {source})")
+        return
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source, dest)
+    print(f"Staged PGPR KG data for {args.dataset!r}: {source} -> {dest}")
+
+
 def cmd_aggregate(args: argparse.Namespace) -> None:
     run_dir = Path(args.run)
     results_df = pd.read_parquet(run_dir / "results.parquet")
@@ -118,6 +151,13 @@ def main(argv: list[str] | None = None) -> None:
     )
     split_p.add_argument("--config", required=True)
     split_p.set_defaults(func=cmd_split)
+
+    stage_pgpr_p = sub.add_parser(
+        "stage-pgpr-kg", help="Copy PGPR's own pre-existing KG dataset into data/raw/pgpr_kg/<dataset>"
+    )
+    stage_pgpr_p.add_argument("--source", required=True, help="Existing dir with entities/relations/mappings/train.txt/test.txt")
+    stage_pgpr_p.add_argument("--dataset", required=True, help="Dataset name, e.g. ml100k or ml1m")
+    stage_pgpr_p.set_defaults(func=cmd_stage_pgpr_kg)
 
     agg_p = sub.add_parser("aggregate", help="Mean +/- std across seeds for a completed run")
     agg_p.add_argument("--run", required=True)

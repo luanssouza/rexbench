@@ -2,17 +2,31 @@
 actually-executed tree; AUDIT.md's log evidence traces to these exact files, not the unused
 nested `models/PGPR/models/PGPR/` copy).
 
-KNOWN, DISCLOSED SCOPE LIMITATION (see AUDIT.md's PGPR KG section and the plan's per-dataset
-table): PGPR's entire pipeline (preprocess.py / train_transe_model.py / train_agent.py /
-test_agent.py) is hardcoded around its own on-disk `datasets/<name>/train.txt` +
-`test.txt` + pre-linked KG files, addressed by dataset-name string constants throughout
-(myutils.py's DATASET_DIR/TMP_DIR/LABELS_DIR). There is no parameterizable entry point
-for supplying an arbitrary train/test split. This adapter therefore runs PGPR's OWN
-pre-existing ml100k/ml1m split (the same one AUDIT.md confirmed produced real results),
-NOT rexbench's DatasetBundle split — unlike every other adapter, PGPR is not guaranteed to
-share the exact same train/test rows as the other models on the same dataset. Reconciling
-this (regenerating PGPR's train.txt/test.txt from DatasetBundle, keyed to PGPR's own
-review-uid <-> KG-uid mapping) is real, scoped follow-up work — see REGISTRY.md.
+RESOLVED (previously a disclosed scope limitation — see REGISTRY.md and git history for the
+prior state): PGPR's own train/test files use the exact same raw MovieLens ids as
+`u.data`/`ratings.dat` (verified against `myutils.py`'s `get_uid_to_kgid_mapping`/
+`get_product_id_kgid_mapping`, which key their lookup tables by that raw id — the same value
+already stored in `DatasetBundle.user_id_map`/`item_id_map`). `fit()` now regenerates PGPR's
+`train.txt`/`test.txt` (+ `.gz`) from `dataset.train`+`dataset.val` (merged — PGPR has no
+validation concept of its own and isn't wired into HPO, see README.md) and `dataset.test`,
+translated back to raw ids, so PGPR shares the exact same test rows as every other model on
+the dataset. Items with no KG entity node (a real, pre-existing gap — ml100k's KG covers
+1424/1682 movies, ml1m 3265/3706) are silently skipped by PGPR's own existing
+`generate_labels`/`load_reviews` logic (`if product_idx not in id2kgid: continue`) exactly as
+they already were on PGPR's original split — this doesn't introduce that gap, just applies
+the same graceful handling to rexbench's split instead.
+
+Mechanically: `DATASET_DIR[name]` (from PGPR's own vendored `utils.py`) resolves via a
+relative path (`'../../datasets/<name>'`) to `external/explanation-quality-recsys/datasets/
+<name>` — a real, *git-tracked* directory inside the submodule holding a stale, incomplete
+partial commit (missing `entities/`/`relations/`/`mappings/`/`train.txt.gz` entirely) — NOT
+`models/PGPR/datasets/<name>` as an earlier version of this file assumed (a real bug: that
+symlink was never actually read by anything). Since writing into a submodule's own tracked
+files at runtime would be its own problem, `fit()` instead monkey-patches `DATASET_DIR[name]`
+(a plain, mutable module-level dict) to point at a rexbench-owned, gitignored
+`pgpr_runtime/<name>/` directory — see `_materialize_pgpr_dataset_dir` — which symlinks the
+static KG structure from the staged `data/raw/pgpr_kg/<name>` (entities/relations/mappings,
+unaffected by the split) and writes only train.txt/test.txt(.gz) fresh each fit() call.
 
 fit() replicates preprocess.py's main() body (same function calls, same order — AmazonDataset
 -> KnowledgeGraph -> generate_labels), then calls train_transe_model.train(args) and
@@ -29,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import gzip
 import os
 import pickle
 from pathlib import Path
@@ -58,11 +73,84 @@ def _chdir(path: Path):
 
 
 def _count_kg_triples(kg_source_dir: Path) -> int:
+    """Real triple count for what PGPR's own training code actually reads. BUGFIX (found
+    while staging ml1m's KG data): this used to count lines in `kg_final.txt` alone, but
+    `data_utils.py`/`knowledge_graph.py` never read `kg_final.txt`/`e_map.txt`/`r_map.txt` at
+    all -- PGPR loads `entities/*.txt.gz` and `relations/*.txt(.gz)` directly. Those three
+    files are leftover artifacts from an unrelated joint-kg/KGAT conversion that happens to
+    exist for ml100k but not ml1m, even though ml1m has perfectly good KG data of its own --
+    the old check made ml1m look like it had zero triples and would have failed its
+    precondition for no real reason. Each line in a relations/<relation>.txt file is one
+    item's space-separated related-entity ids, so the real triple count for a relation is
+    the token count across its lines, not the line count. Falls back to the old kg_final.txt
+    line count only if there's no relations/ dir at all, rather than just returning 0."""
+    relations_dir = kg_source_dir / "relations"
+    if relations_dir.exists():
+        by_relation: dict[str, Path] = {}
+        for path in relations_dir.iterdir():
+            if path.suffix not in (".txt", ".gz"):
+                continue
+            name = path.name.removesuffix(".gz").removesuffix(".txt")
+            by_relation.setdefault(name, path)  # .txt and .txt.gz are duplicates; either is fine
+        total = 0
+        for path in by_relation.values():
+            opener = gzip.open if path.suffix == ".gz" else open
+            with opener(path, "rt") as f:
+                total += sum(len(line.split()) for line in f)
+        return total
+
     kg_final = kg_source_dir / "kg_final.txt"
-    if not kg_final.exists():
-        return 0
-    with open(kg_final) as f:
-        return sum(1 for _ in f)
+    if kg_final.exists():
+        with open(kg_final) as f:
+            return sum(1 for _ in f)
+    return 0
+
+
+_PGPR_SPLIT_FILENAMES = ("train.txt", "train.txt.gz", "test.txt", "test.txt.gz")
+
+
+def _write_pgpr_split_file(
+    runtime_dir: Path, split_name: str, df: pd.DataFrame, user_id_map: dict, item_id_map: dict,
+) -> None:
+    """Writes `<split_name>.txt` and `.txt.gz` in PGPR's own review-file format (space
+    separated `user item rating timestamp`, raw MovieLens ids — see module docstring),
+    always overwriting whatever was there before: this directory is rexbench-owned working
+    state, not the staged source, so there's no reuse-vs-recompute question here the way
+    there is for data/splits/ -- every fit() call regenerates it fresh from the `dataset`
+    object it was actually called with."""
+    lines = [
+        f"{user_id_map[int(row.user_id)]} {item_id_map[int(row.item_id)]} "
+        f"{int(round(row.rating))} {int(row.timestamp)}"
+        for row in df.itertuples(index=False)
+    ]
+    text = "\n".join(lines) + ("\n" if lines else "")
+    (runtime_dir / f"{split_name}.txt").write_text(text)
+    with gzip.open(runtime_dir / f"{split_name}.txt.gz", "wt") as f:
+        f.write(text)
+
+
+def _materialize_pgpr_dataset_dir(
+    runtime_dir: Path, source_dir: Path, train_df: pd.DataFrame, test_df: pd.DataFrame,
+    user_id_map: dict, item_id_map: dict,
+) -> None:
+    """Builds/refreshes a rexbench-owned PGPR dataset directory: symlinks everything static
+    from the staged, read-only `data/raw/pgpr_kg/<name>` (entities/, relations/, mappings/,
+    etc. — unaffected by which split is in use) but writes FRESH train.txt/test.txt(.gz)
+    derived from rexbench's own DatasetBundle split. Never mutates data/raw/pgpr_kg itself
+    (shared, rsync'd to other machines) and never writes into the vendored
+    explanation-quality-recsys submodule's own datasets/<name> (git-tracked, and the
+    directory PGPR's DATASET_DIR points at by default — see module docstring for why this
+    function's caller overrides that instead)."""
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    for entry in source_dir.iterdir():
+        if entry.name in _PGPR_SPLIT_FILENAMES:
+            continue
+        link = runtime_dir / entry.name
+        if not link.exists():
+            link.symlink_to(entry)
+
+    _write_pgpr_split_file(runtime_dir, "train", train_df, user_id_map, item_id_map)
+    _write_pgpr_split_file(runtime_dir, "test", test_df, user_id_map, item_id_map)
 
 
 class PGPRModelAdapter(ModelAdapter):
@@ -113,22 +201,30 @@ class PGPRModelAdapter(ModelAdapter):
         hp = self.config.hyperparameters_for(name)
 
         with _chdir(PGPR_ROOT):
-            # train_ml100k.sh (the script that produced AUDIT.md's confirmed successful
-            # PGPR runs) does `cd models/PGPR` before running these scripts, so
-            # DATASET_DIR['./datasets/<name>'] resolves relative to models/PGPR/. The KG
-            # relation data isn't code (it doesn't live in the explanation-quality-recsys
-            # submodule — see REGISTRY.md's "no verified canonical download source" note),
-            # so it's placed manually per data/README.md at data/raw/pgpr_kg/ and symlinked
-            # in here; no submodule source file touched.
-            local_datasets = Path("datasets")
-            if not local_datasets.exists():
-                pgpr_kg_dir = REPO_ROOT / "data" / "raw" / "pgpr_kg"
-                if not pgpr_kg_dir.exists():
-                    raise FileNotFoundError(
-                        f"{pgpr_kg_dir} not found — see data/README.md for how to obtain "
-                        f"PGPR's knowledge-graph data before training on {name!r}"
-                    )
-                local_datasets.symlink_to(pgpr_kg_dir)
+            # The KG relation data isn't code (it doesn't live in the
+            # explanation-quality-recsys submodule — see REGISTRY.md's "no verified
+            # canonical download source" note), so it's placed manually per data/README.md
+            # at data/raw/pgpr_kg/ (or via `rexbench stage-pgpr-kg`). See module docstring
+            # for why this is materialized into pgpr_runtime/ (with DATASET_DIR
+            # monkey-patched to point there) rather than symlinked directly into either
+            # data/raw/pgpr_kg/ (shared, read-only, rsync'd to other machines) or the
+            # submodule's own git-tracked datasets/<name> (stale/incomplete, and not ours to
+            # write into).
+            pgpr_kg_source = REPO_ROOT / "data" / "raw" / "pgpr_kg" / name
+            if not pgpr_kg_source.exists():
+                raise FileNotFoundError(
+                    f"{pgpr_kg_source} not found — see data/README.md for how to obtain "
+                    f"PGPR's knowledge-graph data before training on {name!r} (or run "
+                    f"`rexbench stage-pgpr-kg --source <dir> --dataset {name}`)"
+                )
+            runtime_dir = REPO_ROOT / "pgpr_runtime" / name
+            _materialize_pgpr_dataset_dir(
+                runtime_dir, pgpr_kg_source,
+                train_df=pd.concat([dataset.train, dataset.val], ignore_index=True),
+                test_df=dataset.test,
+                user_id_map=dataset.user_id_map, item_id_map=dataset.item_id_map,
+            )
+            DATASET_DIR[name] = str(runtime_dir)
 
             tmp_dir = Path(TMP_DIR[name])
             tmp_dir.mkdir(parents=True, exist_ok=True)

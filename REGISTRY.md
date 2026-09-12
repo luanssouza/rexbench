@@ -26,18 +26,31 @@ Not a missing-implementation issue — PGPR's own KG-relation registry (`baselin
 | Coat, Electronics, Amazon(ModCloth-family), RentTheRunway, AMBAR, LastFM1K | `needs_construction` — real categorical/entity side-info exists in the raw data (or, for LastFM1K, a relation *schema* already exists in code with no data files), but no dataset-specific relation-extraction code exists to turn it into a KG PGPR can consume. Estimated ~0.5–1 day of new engineering each. |
 | Amazon Digital Music | `unsupported` — review text/ratings only, no structured entity or category fields to build a KG from without additional NLP work. |
 
-## Known scope limitation: PGPR's train/test split
+## RESOLVED: PGPR's train/test split now matches DatasetBundle
 
-`PGPRModelAdapter` (`rexbench/src/rexbench/models/pgpr_adapter.py`) runs PGPR's own
-pre-existing on-disk `datasets/{ml100k,ml1m}/train.txt`/`test.txt` split, not rexbench's
-`DatasetBundle` split. PGPR's preprocessing pipeline (`preprocess.py`, `myutils.py`) is
-hardcoded around dataset-name string constants and fixed relative paths with no
-parameterizable entry point for an arbitrary split. Reconciling this — regenerating PGPR's
-`train.txt`/`test.txt` from `DatasetBundle`, keyed through PGPR's own review-uid <-> KG-uid
-mapping (`user_mappings.txt`) — is real, scoped follow-up work, not done in this pass.
-This means PGPR is the one model in this pipeline not guaranteed to share the exact same
-train/test rows as every other model on ml100k/ml1m — flag this explicitly in any
-cross-model comparison table.
+Previously, `PGPRModelAdapter` ran PGPR's own pre-existing on-disk `train.txt`/`test.txt`
+split, not rexbench's `DatasetBundle` split — flagged as scoped follow-up work. Now fixed:
+`fit()` regenerates PGPR's `train.txt`/`test.txt` (+ `.gz`) from
+`dataset.train`+`dataset.val` (merged — PGPR has no validation concept and isn't wired into
+HPO) and `dataset.test`, translated to PGPR's raw MovieLens ids via
+`DatasetBundle.user_id_map`/`item_id_map` (verified these are the same ids PGPR's own
+`mappings/user_mappings.txt`/`product_mappings.txt` key on). PGPR now shares the exact same
+test rows as every other model on ml100k/ml1m, and — as a side effect — also respects
+`SampleConfig` (smoke-test sampling), which it previously ignored.
+
+Two things worth knowing:
+- Items with no KG entity node (ml100k: 1424/1682 movies covered; ml1m: 3265/3706) are
+  silently skipped by PGPR's own pre-existing `generate_labels`/`load_reviews` logic
+  (`if product_idx not in id2kgid: continue`) — this gap already existed on PGPR's original
+  split; regenerating the split doesn't introduce it, just applies the same handling.
+- A real, previously-undiscovered bug was found and fixed along the way: PGPR's
+  `DATASET_DIR[name]` resolves via a relative path (`'../../datasets/<name>'`) to
+  `external/explanation-quality-recsys/datasets/<name>` — a stale, incomplete,
+  *git-tracked* directory inside the submodule — not `models/PGPR/datasets/<name>` as the
+  adapter's symlink previously (and incorrectly) assumed; that symlink was never actually
+  read by anything. `fit()` now monkey-patches `DATASET_DIR[name]` to a rexbench-owned
+  `pgpr_runtime/<name>/` directory instead, built via `_materialize_pgpr_dataset_dir` — see
+  `pgpr_adapter.py`'s module docstring.
 
 ## Known gap: PGPR's KG relation data has no verified canonical download source
 
