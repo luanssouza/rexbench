@@ -189,7 +189,7 @@ class PGPRModelAdapter(ModelAdapter):
         from utils import DATASET_DIR, TMP_DIR  # PGPR's own module, on sys.path via vendor
         from data_utils import AmazonDataset
         from knowledge_graph import KnowledgeGraph
-        from utils import save_dataset, load_dataset, save_kg
+        from utils import save_dataset, load_dataset, save_kg, get_logger
         from preprocess import generate_labels
         import train_transe_model
         import train_agent
@@ -248,6 +248,13 @@ class PGPRModelAdapter(ModelAdapter):
                 log_dir=str(tmp_dir / "transe"),
             )
             Path(transe_args.log_dir).mkdir(parents=True, exist_ok=True)
+            # BUGFIX (smoke test: every PGPR run crashed with "'NoneType' object has no
+            # attribute 'info'"). train_transe_model/train_agent keep `logger = None` at
+            # module level and only assign it inside their own main(), which this adapter
+            # deliberately does not call -- it replicates main()'s body instead. Replicating
+            # the logger setup too is the missing piece, not a behaviour change.
+            train_transe_model.logger = get_logger(transe_args.log_dir + '/train_log.txt')
+            train_transe_model.logger.info(str(transe_args))
             train_transe_model.train(transe_args)
             train_transe_model.extract_embeddings(transe_args)
 
@@ -261,6 +268,8 @@ class PGPRModelAdapter(ModelAdapter):
                 log_dir=str(tmp_dir / "agent"),
             )
             Path(agent_args.log_dir).mkdir(parents=True, exist_ok=True)
+            train_agent.logger = get_logger(agent_args.log_dir + '/train_log.txt')  # see above
+            train_agent.logger.info(str(agent_args))
             train_agent.train(agent_args)
 
             self._policy_file = Path(agent_args.log_dir) / f"policy_model_epoch_{agent_args.epochs}.ckpt"

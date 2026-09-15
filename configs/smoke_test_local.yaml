@@ -73,8 +73,8 @@ datasets:
     kg: {status: needs_construction}
 
   - name: ambar
-    loader: ambar
-    raw_path: ../datasets/AMBAR/data/AMBAR/ratings_info.csv
+    loader: ambar_artist
+    raw_path: {ratings: ../datasets/AMBAR/data/AMBAR/ratings_info.csv, tracks: ../datasets/AMBAR/data/AMBAR/tracks_info.csv}
     sample: {max_users: 100, max_interactions_per_user: 30, seed: 200}
     split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/smoke_test/ambar}
     topk: [5, 10]

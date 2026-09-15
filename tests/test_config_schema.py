@@ -1,3 +1,4 @@
+import pytest
 import yaml
 
 from rexbench.config.schema import ExperimentConfig
@@ -135,3 +136,87 @@ def test_real_configs_sparse_ebpr_overrides_resolve():
             # an unaffected dataset still gets the model's default, unchanged
             assert model.precondition_for("ml100k").min_fraction_users_with_2plus == 0.5
             assert model.hyperparameters_for("ml100k")["neighborhood"] == 20
+
+
+# --------------------------------------------------------------- shipped configs all load
+
+def _load(path):
+    return ExperimentConfig.model_validate(yaml.safe_load(open(path)))
+
+
+ALL_CONFIGS = [
+    "configs/tier1.yaml", "configs/tier1_local.yaml", "configs/full.yaml",
+    "configs/hpo_example.yaml", "configs/smoke_test.yaml", "configs/smoke_test_local.yaml",
+    "configs/stage1_tier1.yaml", "configs/stage1_tier1_local.yaml", "configs/stage1_full.yaml",
+]
+
+STAGE1_DEFERRED = {"ambar", "amazon_digital_music"}
+
+
+@pytest.mark.parametrize("path", ALL_CONFIGS)
+def test_every_shipped_config_loads(path):
+    config = _load(path)
+    assert config.datasets and config.models
+
+
+@pytest.mark.parametrize("path", ALL_CONFIGS)
+def test_split_store_dirs_are_namespaced_by_scale(path):
+    """Full-scale splits under data/splits/full/, sampled ones under data/splits/smoke_test/
+    — so a sampled split can never be mistaken for a full-scale one at the same path."""
+    for dataset in _load(path).datasets:
+        store_dir = dataset.split.store_dir
+        assert store_dir is not None, f"{path}:{dataset.name} has no store_dir"
+        sampled = dataset.sample.max_users is not None
+        expected = "data/splits/smoke_test/" if sampled else "data/splits/full/"
+        assert store_dir.startswith(expected), f"{path}:{dataset.name} -> {store_dir}"
+
+
+@pytest.mark.parametrize(
+    "path", ["configs/stage1_tier1.yaml", "configs/stage1_tier1_local.yaml", "configs/stage1_full.yaml"]
+)
+def test_stage1_configs_exclude_the_deferred_datasets(path):
+    config = _load(path)
+    names = {d.name for d in config.datasets}
+    assert not (names & STAGE1_DEFERRED), f"{path} still contains {names & STAGE1_DEFERRED}"
+    assert len(names) == 6
+    # a dataset_override pointing at a dropped dataset would be a dangling reference
+    for model in config.models:
+        assert not (set(model.dataset_overrides) & STAGE1_DEFERRED)
+        if isinstance(model.applies_to, list):
+            assert not (set(model.applies_to) & STAGE1_DEFERRED)
+
+
+def test_stage1_shares_store_dir_with_the_full_config():
+    """Splits materialized by stage 1 must be reused verbatim by the 8-dataset configs
+    later, not recomputed — same store_dir is what guarantees that."""
+    stage1 = {d.name: d.split.store_dir for d in _load("configs/stage1_tier1.yaml").datasets}
+    tier1 = {d.name: d.split.store_dir for d in _load("configs/tier1.yaml").datasets}
+    for name, store_dir in stage1.items():
+        assert tier1[name] == store_dir
+
+
+# ------------------------------------------- the EBPR family is complete in the "all" configs
+
+EBPR_ENGINE_VARIANTS = {"BPR", "UBPR", "EBPR", "pUEBPR", "UEBPR"}
+
+
+@pytest.mark.parametrize("path", ["configs/full.yaml", "configs/stage1_full.yaml"])
+def test_all_five_ebpr_engine_variants_are_configured(path):
+    """external/ebpr/Code/engine_EBPR.py asserts config['model'] is one of five variants.
+    The "run everything" configs should exercise all five, not the three that were
+    originally wired (README's model table already claimed BPR was Tier 1)."""
+    config = _load(path)
+    variants = {m.variant for m in config.models if m.adapter == "ebpr"}
+    assert variants == EBPR_ENGINE_VARIANTS
+
+
+@pytest.mark.parametrize("path", ["configs/full.yaml", "configs/stage1_full.yaml"])
+def test_ebpr_bpr_does_not_collide_with_recbole_bpr(path):
+    """Two different codebases both implement BPR; they must land in results.parquet under
+    distinct `model` names or their rows merge silently."""
+    config = _load(path)
+    names = [m.name for m in config.models]
+    assert len(names) == len(set(names)), f"duplicate model names in {path}"
+    by_name = {m.name: m for m in config.models}
+    assert by_name["BPR_ebpr"].adapter == "ebpr"
+    assert by_name["BPR"].adapter == "recbole"

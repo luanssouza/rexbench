@@ -42,6 +42,15 @@ def _load_lastfm1k(path: str) -> pd.DataFrame:
     df = df[[0, 4, 1]]
     df.columns = ["user_id", "item_id", "timestamp"]
     df.dropna(inplace=True)
+    # BUGFIX (found in the smoke test's failures.csv: every RecBole model crashed on
+    # lastfm1k with "Unable to convert column timestamp:float to type float64"). Column 1 is
+    # an ISO-8601 string ("2009-05-04T23:08:57Z"), not a Unix epoch, and the predecessor
+    # loader passed it through unconverted. Same bug class as _load_electronics above. EBPR
+    # is unaffected (it drops timestamp), which is why this only ever surfaced for RecBole.
+    df["timestamp"] = (
+        pd.to_datetime(df["timestamp"], format="ISO8601", utc=True, errors="coerce")
+        .astype("int64") // 10**9
+    ).astype("int64")
     return df
 
 
@@ -64,6 +73,15 @@ def _load_lastfm1k_artist(path: str) -> pd.DataFrame:
     df = df[[0, 2, 1]]
     df.columns = ["user_id", "item_id", "timestamp"]
     df.dropna(inplace=True)
+    # BUGFIX (found in the smoke test's failures.csv: every RecBole model crashed on
+    # lastfm1k with "Unable to convert column timestamp:float to type float64"). Column 1 is
+    # an ISO-8601 string ("2009-05-04T23:08:57Z"), not a Unix epoch, and the predecessor
+    # loader passed it through unconverted. Same bug class as _load_electronics above. EBPR
+    # is unaffected (it drops timestamp), which is why this only ever surfaced for RecBole.
+    df["timestamp"] = (
+        pd.to_datetime(df["timestamp"], format="ISO8601", utc=True, errors="coerce")
+        .astype("int64") // 10**9
+    ).astype("int64")
     return df
 
 
@@ -71,6 +89,27 @@ def _load_ambar(path: str) -> pd.DataFrame:
     df = pd.read_csv(path)
     df.columns = ["user_id", "item_id", "rating"]
     return df
+
+
+def _load_ambar_artist(ratings_path: str, tracks_path: str) -> pd.DataFrame:
+    """AMBAR aggregated to ARTIST level, joining ratings_info.csv's `track_id` through
+    tracks_info.csv's `track_id -> artist_id` map.
+
+    Same reasoning as _load_lastfm1k_artist: AMBAR's raw item space is 443,921 tracks, and
+    EBPR's dense item x item similarity matrix needs 443,921^2 * 8 bytes = 1,577 GB — far
+    beyond any ordinary machine. There are only 30,667 artists, which brings it to ~7.5 GB.
+
+    Unlike k-core filtering this loses essentially no interactions (every track carries an
+    artist_id), and it makes AMBAR and LastFM1K directly comparable, since both then sit at
+    artist level. It is also what makes AMBAR's real selling point reachable later: its
+    artists_info.csv carries artist gender/country/continent, i.e. the provider attributes
+    needed for group-fairness analysis, which are defined per ARTIST and not per track.
+    """
+    ratings = pd.read_csv(ratings_path)
+    tracks = pd.read_csv(tracks_path)[["track_id", "artist_id"]]
+    df = ratings.merge(tracks, on="track_id", how="inner")
+    df = df.rename(columns={"user_id": "user_id", "artist_id": "item_id"})
+    return df[["user_id", "item_id", "rating"]]
 
 
 def _coat_interactions(df: pd.DataFrame) -> pd.DataFrame:
@@ -145,6 +184,7 @@ _LOADERS = {
     "lastfm1k": _load_lastfm1k,
     "lastfm1k_artist": _load_lastfm1k_artist,
     "ambar": _load_ambar,
+    "ambar_artist": lambda raw: _load_ambar_artist(raw["ratings"], raw["tracks"]),
     "coat": lambda raw: _load_coat(raw["train"], raw["test"]),
     "electronics": _load_electronics,
     "rentrunway": _load_rentrunway,

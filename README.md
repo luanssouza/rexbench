@@ -27,7 +27,7 @@ git submodule update --init --recursive
 | Model family | Wraps | Adapter |
 |---|---|---|
 | Pop, BPR, MultiVAE, NeuMF, SLIM (Tier 2) | vendored RecBole (pip dependency) + `models/recbole_adapter.py`'s own `.inter` file writer | `models/recbole_adapter.py` |
-| BPR/EBPR/UBPR/UEBPR (Tier 1, required) | `external/ebpr/Code/{EBPR_model,engine_EBPR,data}.py` (submodule, your fork) | `models/ebpr_adapter.py` |
+| BPR/EBPR/UBPR/pUEBPR/UEBPR (Tier 1, required) — all five variants its engine dispatches on; the EBPR-codebase BPR is configured as `BPR_ebpr` to avoid colliding with RecBole's `BPR` | `external/ebpr/Code/{EBPR_model,engine_EBPR,data}.py` (submodule, your fork) | `models/ebpr_adapter.py` |
 | PGPR (Tier 1, required) | `external/explanation-quality-recsys/models/PGPR/*.py` (submodule, your fork; the outer, actually-executed tree) | `models/pgpr_adapter.py` |
 | AR, KNN explainers | `external/recoxplainer` (submodule, your fork) + `explainers/_bridge.py`'s bridging code (ported from the predecessor pipeline's explanation layer) | `explainers/recoxplainer_{ar,knn}.py` |
 
@@ -261,7 +261,7 @@ produced.
 dataset rows (a reorganization of licensed content, not a reduction of it), so they travel
 between machines by hand (`rsync`/`scp`/the Studio's file browser), never via git.
 
-## LastFM1K memory: why it needs a filter to run at all
+## Full-scale memory: LastFM1K and AMBAR need item-level aggregation to run at all
 
 EBPR builds a **dense** item x item cosine-similarity matrix (`external/ebpr/Code/data.py`,
 `create_explainability_matrix` / `create_neighborhood`), so its memory cost is quadratic in
@@ -306,6 +306,43 @@ dataset and defaults to no filtering, so nothing else in the suite is affected. 
 iterative k-core (dropping rare items can push users below their threshold and vice versa),
 runs before the split and before `sample`, and is part of the persisted-split fingerprint —
 a split materialized under one filter will not be silently reused under another.
+
+### AMBAR has the same problem, with a cleaner fix
+
+AMBAR's raw item space is 443,921 **tracks** (31,013 users, 3,311,462 ratings), so EBPR needs
+443,921² × 8 = **1,577 GB** — plus another 110 GB for the dense users × items matrix.
+
+Unlike LastFM1K, AMBAR ships an explicit `track_id -> artist_id` map in `tracks_info.csv`,
+so `loader: ambar_artist` joins through it and reaches artist level **without discarding a
+single interaction**: 30,667 items, all 3,311,462 ratings retained, **15.1 GB peak**
+(measured). k-core filtering was the alternative and is strictly worse here — at
+`min_item_interactions: 20` it reaches 11.7 GB but throws away 37% of the data.
+
+This also puts AMBAR and LastFM1K both at artist level, so the two music datasets are
+directly comparable — and it is what makes AMBAR's provider-fairness angle reachable later,
+since `artists_info.csv` defines gender/country/continent per *artist*, not per track.
+
+### Full-scale footprint, all eight datasets
+
+Measured with the real configs (no sampling), peak = similarity + dense interaction matrix:
+
+| Dataset | Users | Items | Interactions | Peak RAM | Status |
+|---|---|---|---|---|---|
+| ml100k | 943 | 1,682 | 100,000 | 0.02 GB | fine |
+| ml1m | 6,040 | 3,706 | 1,000,209 | 0.3 GB | fine |
+| coat | 290 | 300 | 11,600 | 0.001 GB | fine |
+| electronics | 132,393 | 8,188 | 174,124 | 9.2 GB | fine |
+| rentrunway | 105,508 | 5,850 | 192,462 | 5.2 GB | fine |
+| lastfm1k (artist, ≥20) | 992 | 35,432 | 18,138,905 | 10.3 GB | fixed |
+| ambar (artist) | 31,013 | 30,667 | 3,311,462 | 15.1 GB | fixed |
+| amazon_digital_music | 100,952 | 70,519 | 130,434 | 96.7 GB | **unresolved** |
+
+**`amazon_digital_music` is not a memory problem that filtering can fix.** It has 130,434
+interactions spread over 100,952 users — 1.3 interactions per user, with 87.3% of users
+having fewer than 2. Any filter that shrinks the catalogue enough to fit also destroys the
+dataset: `min_item_interactions: 5` leaves 523 users and 1.1% of the interactions. This needs
+a decision (a larger Amazon Digital Music dump, or excluding it from EBPR runs), not a
+threshold.
 
 **If you need to go smaller still**, `min_item_interactions: 50` gets artist level to 4 GB
 while still keeping 96% of interactions. Changing EBPR's dense matrices to a chunked or
@@ -387,7 +424,9 @@ They are listed here for completeness, not as citable implementations of named m
 ## Running
 
 ```bash
-rexbench split --config configs/tier1.yaml     # materialize data/splits/* (see above) -- optional, skip if no dataset sets store_dir
+rexbench split --config configs/stage1_tier1_local.yaml  # materialize data/splits/full/* from local raw data
+rexbench run   --config configs/stage1_tier1.yaml       # STAGE 1: Tier 1 models, the 6 datasets verified to fit 32GB
+rexbench run   --config configs/stage1_full.yaml        # STAGE 1: EVERYTHING (11 models x 6 datasets x 3 seeds)
 rexbench stage-pgpr-kg --source <dir> --dataset ml100k  # copy PGPR's own KG data into data/raw/pgpr_kg/ml100k -- optional, only needed for PGPR
 rexbench run --config configs/smoke_test.yaml  # everything we have, sampled tiny — run this first
 rexbench run --config configs/tier1.yaml       # EBPR family + PGPR only
@@ -421,7 +460,7 @@ Run without the merged environment installed:
 ```bash
 PYTHONPATH=src python3 -m pytest tests/test_config_schema.py tests/test_metrics_validate.py tests/test_dataset_bundle.py tests/test_hpo.py tests/test_significance.py tests/test_item_side_fairness.py tests/test_kcore_filter.py -v
 ```
-77/77 passing — covers the config schema (including all three real configs, the per-dataset
+103/103 passing — covers the config schema (including all three real configs, the per-dataset
 `dataset_overrides` mechanism, and `HPOConfig`/`HPOParamSpec` validation), the dataset/split/
 tail-item logic (dependency-free after absorbing the predecessor pipeline's loaders —
 `core/dataset.py` no longer needs RecBole just to import), the HPO grid/random sampling

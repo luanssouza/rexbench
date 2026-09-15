@@ -1,10 +1,38 @@
-# Full config: Tier 1 (EBPR family + PGPR) plus Tier 2 (Pop/BPR/MultiVAE/NeuMF/SLIM,
-# the predecessor pipeline's original baselines — AUDIT.md's model x dataset matrix) with
-# AR/KNN post-hoc explainers applied to every Tier 2 model.
-# Run from the rexbench repo root: `rexbench run --config configs/full.yaml`
+# STAGE 1 — EVERY configuration the code can run, on the 6 datasets verified to fit 32GB.
+#
+# 11 models x 6 datasets (PGPR on ml100k/ml1m only) x 3 seeds = 186 model fits, plus 180
+# explainer runs. This is the complete experiment minus the two deferred datasets:
+#   - EBPR family, all 5 engine variants: BPR_ebpr, UBPR, EBPR, pUEBPR, UEBPR
+#   - PGPR (ml100k/ml1m — the only datasets with a KG)
+#   - RecBole Tier 2: Pop, BPR, MultiVAE, NeuMF, SLIM
+#   - AR + KNN explainers on every RecBole model (they are gated to RecBole models by
+#     isinstance() in explainers/*.py — EBPR/PGPR cannot be explained by them; PGPR has
+#     its own native explain()).
+# Nothing else is wired in. See REGISTRY.md for what is deliberately excluded and why.
+#
+# configs/full.yaml restricted to the six datasets that are verified runnable at full scale
+# inside 32GB of RAM. `ambar` and `amazon_digital_music` are deferred to a later stage:
+#
+#   ambar   — SOLVED, not blocked. loader: ambar_artist reaches 15.1 GB with 100% of the
+#             3,311,462 ratings retained (measured). It is held back only to sequence the
+#             runs; re-including it is a copy-paste of its block from full.yaml.
+#   amazon_digital_music — genuinely unresolved. 130,434 interactions over 100,952 users
+#             (1.3/user, 87.3% with fewer than 2) needs 96.7 GB unfiltered, and no k-core
+#             threshold rescues it (>=5 leaves 523 users and 1.1% of the data). Needs a
+#             larger dump or exclusion — a decision, not a setting.
+#
+# See README's "Full-scale memory" section for the measured table behind both.
+#
+# Splits live under data/splits/full/<dataset>, mirroring data/splits/smoke_test/<dataset>
+# — same store_dir as full.yaml, so splits materialized here are reused verbatim by the
+# full 8-dataset configs later without recomputation.
+#
+# Run from the rexbench repo root (on the Studio, after rsyncing data/splits/):
+#   rexbench run --config configs/stage1_full.yaml
+
 
 experiment:
-  name: full
+  name: stage1_full
   output_dir: rexbench/outputs
 
 determinism:
@@ -53,14 +81,6 @@ datasets:
     tail_fraction: 0.20
     kg: {status: needs_construction}
 
-  - name: ambar
-    loader: ambar_artist
-    raw_path: {ratings: data/raw/ambar/ratings_info.csv, tracks: data/raw/ambar/tracks_info.csv}
-    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/full/ambar}
-    topk: [5, 10]
-    tail_fraction: 0.20
-    kg: {status: needs_construction}
-
   - name: lastfm1k
     loader: lastfm1k_artist
     raw_path: data/raw/lastfm1k/userid-timestamp-artid-artname-traid-traname.tsv
@@ -69,14 +89,6 @@ datasets:
     topk: [5, 10]
     tail_fraction: 0.20
     kg: {status: needs_construction}
-
-  - name: amazon_digital_music
-    loader: amazon_digital_music
-    raw_path: data/raw/amazon_digital_music/Digital_Music.jsonl
-    split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/full/amazon_digital_music}
-    topk: [5, 10]
-    tail_fraction: 0.20
-    kg: {status: unsupported}
 
 models:
   # electronics/rentrunway/amazon_digital_music are far too sparse for the default
@@ -100,9 +112,6 @@ models:
         hyperparameters: {num_epoch: 50, batch_size: 512, lr: 0.001, num_latent: 8, neighborhood: 5, optimizer: adam}
         precondition: {min_fraction_users_with_2plus: 0.05}
       rentrunway:
-        hyperparameters: {num_epoch: 50, batch_size: 512, lr: 0.001, num_latent: 8, neighborhood: 5, optimizer: adam}
-        precondition: {min_fraction_users_with_2plus: 0.05}
-      amazon_digital_music:
         hyperparameters: {num_epoch: 50, batch_size: 512, lr: 0.001, num_latent: 8, neighborhood: 5, optimizer: adam}
         precondition: {min_fraction_users_with_2plus: 0.05}
 

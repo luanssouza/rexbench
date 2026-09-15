@@ -1,9 +1,21 @@
+# Same datasets/models/splits as configs/tier1.yaml, with raw_path pointing at the local
+# ../datasets/ tree instead of data/raw/. Its ONLY purpose is materializing the full-scale
+# splits locally, where the raw data already is:
+#
+#   rexbench split --config configs/tier1_local.yaml     # writes data/splits/<dataset>/
+#   rsync -avz data/splits/ my-studio:rexbench/data/splits/
+#   # then on the Studio:  rexbench run --config configs/tier1.yaml
+#
+# store_dir matches tier1.yaml exactly, and raw_path is deliberately NOT part of the
+# persisted-split fingerprint, so the Studio reuses these splits verbatim without ever
+# needing data/raw/ present. See README's "Persisted splits" section.
+
 # Tier 1 (required): EBPR family (BPR/EBPR/UBPR/UEBPR) on every dataset, PGPR on the two
 # datasets that currently have a pre-linked knowledge graph (AUDIT.md's PGPR KG table).
 # Run from the rexbench repo root: `rexbench run --config configs/tier1.yaml`
 
 experiment:
-  name: tier1
+  name: tier1_local
   output_dir: rexbench/outputs
 
 determinism:
@@ -14,7 +26,7 @@ determinism:
 datasets:
   - name: ml100k
     loader: ml100k
-    raw_path: data/raw/ml100k/u.data
+    raw_path: ../datasets/ML100K/ml-100k/u.data
     split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/full/ml100k}
     topk: [5, 10]
     tail_fraction: 0.20
@@ -22,7 +34,7 @@ datasets:
 
   - name: ml1m
     loader: ml1m
-    raw_path: data/raw/ml1m/ratings.dat
+    raw_path: ../datasets/ML1M/ml-1m/ratings.dat
     split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/full/ml1m}
     topk: [5, 10]
     tail_fraction: 0.20
@@ -30,7 +42,7 @@ datasets:
 
   - name: coat
     loader: coat
-    raw_path: {train: data/raw/coat/train.ascii, test: data/raw/coat/test.ascii}
+    raw_path: {train: ../datasets/Coat/train.ascii, test: ../datasets/Coat/test.ascii}
     split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/full/coat}
     topk: [5, 10]
     tail_fraction: 0.20
@@ -38,7 +50,7 @@ datasets:
 
   - name: electronics
     loader: electronics
-    raw_path: data/raw/electronics/df_electronics.csv
+    raw_path: ../datasets/MarketBias/df_electronics.csv
     split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/full/electronics}
     topk: [5, 10]
     tail_fraction: 0.20
@@ -46,7 +58,7 @@ datasets:
 
   - name: rentrunway
     loader: rentrunway
-    raw_path: data/raw/rentrunway/renttherunway_final_data.json
+    raw_path: ../datasets/Clothes/renttherunway_final_data.json
     split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/full/rentrunway}
     topk: [5, 10]
     tail_fraction: 0.20
@@ -54,7 +66,7 @@ datasets:
 
   - name: ambar
     loader: ambar_artist
-    raw_path: {ratings: data/raw/ambar/ratings_info.csv, tracks: data/raw/ambar/tracks_info.csv}
+    raw_path: {ratings: ../datasets/AMBAR/data/AMBAR/ratings_info.csv, tracks: ../datasets/AMBAR/data/AMBAR/tracks_info.csv}
     split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/full/ambar}
     topk: [5, 10]
     tail_fraction: 0.20
@@ -62,7 +74,7 @@ datasets:
 
   - name: lastfm1k
     loader: lastfm1k_artist
-    raw_path: data/raw/lastfm1k/userid-timestamp-artid-artname-traid-traname.tsv
+    raw_path: ../datasets/LastFM1K/lastfm-dataset-1K/userid-timestamp-artid-artname-traid-traname.tsv
     filter: {min_item_interactions: 20}   # 961,417 tracks -> 35,474 artists; see README "LastFM1K memory"
     split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/full/lastfm1k}
     topk: [5, 10]
@@ -71,7 +83,7 @@ datasets:
 
   - name: amazon_digital_music
     loader: amazon_digital_music
-    raw_path: data/raw/amazon_digital_music/Digital_Music.jsonl
+    raw_path: ../datasets/Amazon/Digital_Music.jsonl
     split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/full/amazon_digital_music}
     topk: [5, 10]
     tail_fraction: 0.20

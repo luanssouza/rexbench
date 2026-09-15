@@ -64,7 +64,9 @@ class EBPRModelAdapter(ModelAdapter):
     def __init__(self, config: ModelConfig):
         super().__init__(config)
         self.name = config.name
-        self.variant = config.variant  # "BPR" | "UBPR" | "EBPR" | "UEBPR"
+        # All five variants external/ebpr/Code/engine_EBPR.py dispatches on (its own
+        # assert lists exactly these). The loss for each is selected by config["model"].
+        self.variant = config.variant  # "BPR" | "UBPR" | "EBPR" | "pUEBPR" | "UEBPR"
         self._engine = None
         self._num_items = None
 
@@ -141,6 +143,13 @@ class EBPRModelAdapter(ModelAdapter):
             ["userId", "itemId", "rating", "timestamp", "test"]
         ]
 
+        # BUGFIX: Code/data.py np.save()s four matrices into Output/results/, but the
+        # submodule only ships Output/checkpoints/ -- so every fit died with
+        # FileNotFoundError on a fresh clone. (In the smoke test this was masked: the
+        # random.sample crash happened first.) Creating the directory is the minimal fix;
+        # see README's "EBPR writes 587 GB of unused matrices" note for the cost this
+        # implies and how to switch it off.
+        (EBPR_ROOT / "Output" / "results").mkdir(parents=True, exist_ok=True)
         with _chdir(EBPR_ROOT):
             sample_generator = SampleGenerator(ratings, config, split_val=False)
             test_data = sample_generator.test_data_loader(config["batch_size"])
