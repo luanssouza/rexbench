@@ -35,7 +35,11 @@ from rexbench.metrics.validate import MetricRangeError
 _RESOURCE_SIGNATURES = ("out of memory", "cuda oom", "cannot allocate memory")
 
 _ACCURACY_METRICS = ("ndcg", "map")
-_FAIRNESS_METRICS = ("gini", "variance", "entropy", "arp", "arp_normalized", "tail_coverage")
+_FAIRNESS_METRICS = (
+    "gini", "variance", "entropy", "arp", "arp_normalized", "tail_coverage",
+    # item-side (provider-side) — metrics/fairness.py
+    "item_coverage", "item_exposure_gini", "tail_item_coverage", "tail_exposure_share",
+)
 
 
 def _classify_exception(exc: Exception) -> str:

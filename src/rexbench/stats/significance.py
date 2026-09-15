@@ -17,14 +17,38 @@ import pandas as pd
 from scipy import stats
 
 
+def complete_cases(pivot: pd.DataFrame) -> pd.DataFrame:
+    """Friedman/Quade/Kendall's W are repeated-measures tests over a fully populated
+    dataset x model matrix. A model that doesn't apply to every dataset (e.g. PGPR, which
+    only runs on ml100k/ml1m) leaves NaN cells for the rest -- that's not "a few missing
+    points," it makes the matrix ragged, which these tests can't operate on at all.
+    Restricting to datasets where every model in `pivot` actually has a value (listwise
+    deletion) is the standard, mathematically valid way to run them on an unbalanced
+    design. Left unhandled, this either crashes (scipy.stats.friedmanchisquare rejects
+    same-column-different-length groups, which is what independently dropna-ing each
+    column used to produce here) or silently propagates NaN through quade_test's/
+    kendall_w's own arithmetic into a nonsense (but not obviously wrong-looking) result."""
+    return pivot.dropna(axis=0, how="any")
+
+
+_INSUFFICIENT_DATA = {"statistic": float("nan"), "p_value": float("nan"), "significant": False}
+
+
 def friedman_test(pivot: pd.DataFrame, alpha: float = 0.05) -> dict:
-    groups = [pivot[col].dropna().values for col in pivot.columns]
+    pivot = complete_cases(pivot)
+    n_blocks, n_groups = pivot.shape
+    if n_groups < 2 or n_blocks < 2:
+        return dict(_INSUFFICIENT_DATA)
+    groups = [pivot[col].values for col in pivot.columns]
     stat, p_value = stats.friedmanchisquare(*groups)
     return {"statistic": float(stat), "p_value": float(p_value), "significant": bool(p_value < alpha)}
 
 
 def quade_test(pivot: pd.DataFrame, alpha: float = 0.05) -> dict:
+    pivot = complete_cases(pivot)
     n_blocks, n_groups = pivot.shape
+    if n_groups < 2 or n_blocks < 2:
+        return {**_INSUFFICIENT_DATA, "df1": None, "df2": None}
     within_block_ranks = pivot.rank(axis=1)
     block_ranges = pivot.max(axis=1) - pivot.min(axis=1)
     range_ranks = block_ranges.rank()
@@ -59,10 +83,11 @@ def nemenyi_pairwise_pvalues(avg_ranks: pd.Series, n_blocks: int) -> pd.DataFram
 
 
 def kendall_w(pivot: pd.DataFrame) -> float:
+    pivot = complete_cases(pivot)
     n_blocks, n_groups = pivot.shape
-    if n_groups < 2:
+    if n_groups < 2 or n_blocks < 2:
         return float("nan")
-    groups = [pivot[col].dropna().values for col in pivot.columns]
+    groups = [pivot[col].values for col in pivot.columns]
     stat, _ = stats.friedmanchisquare(*groups)
     return float(stat / (n_blocks * (n_groups - 1)))
 

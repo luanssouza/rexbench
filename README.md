@@ -47,6 +47,24 @@ each adapter module's docstring for exactly what's reused verbatim vs. adapted.
 - **RecBole** — a normal pinned pip dependency (`recbole>=1.2` in `pyproject.toml`), the
   same as torch/numpy/pandas. Not vendored — it's a standard, unmodified open-source
   package with stable PyPI releases.
+- **`kmeans-pytorch` and `ray[tune]`** — also plain pip dependencies, needed only because of
+  how RecBole imports itself, not because rexbench uses either: `recbole.model.
+  general_recommender`'s `__init__.py` eagerly imports all ~32 of its models (not just the
+  5 rexbench actually configures), and one of them (`LDiffRec`) needs `kmeans_pytorch`;
+  separately, `explainers/_bridge.py` imports `recbole.quick_start.quick_start` directly,
+  which unconditionally imports `ray.tune`. Verified against RecBole 1.2.1's actual source
+  that no other eagerly-loaded model needs an undeclared dependency (`NCL`/`faiss` and
+  `NNCF`/`networkx`+`community` are real per-model needs but method-scoped, never triggered
+  by importing the package) — so these two are the complete list, not a guess.
+- **`python-box`** — `external/recoxplainer/recoxplainer/config.py` needs it (`from box
+  import Box`), but that submodule's own `setup.py` declares no `install_requires` at all,
+  so `pip install -e external/recoxplainer/` never pulls in any of its dependencies. Its
+  `requirements.txt` is a full, stale notebook-environment snapshot (`torch==1.7.1`,
+  `numpy==1.19.5`, `scikit-learn==0.24.1`, plus unrelated Jupyter/Dash packages) — do **not**
+  `pip install -r` it, since it would downgrade this environment's pinned torch/numpy/
+  scikit-learn below what RecBole/EBPR/PGPR need. Verified against the actual source that
+  the code path `explainers/_bridge.py` touches (`config.py`, `data_reader/`, all four
+  `explain/` classes, `recommender/`) needs nothing else beyond what's already declared.
 - **The predecessor pipeline's small, stable surface** (6 dataset loaders, 2 split
   functions, RecBole `.inter`/YAML conversion, the RecOXPlainer explanation bridge) is
   absorbed directly into rexbench's own package (`core/dataset.py`, `core/splits.py`,
@@ -243,6 +261,129 @@ produced.
 dataset rows (a reorganization of licensed content, not a reduction of it), so they travel
 between machines by hand (`rsync`/`scp`/the Studio's file browser), never via git.
 
+## LastFM1K memory: why it needs a filter to run at all
+
+EBPR builds a **dense** item x item cosine-similarity matrix (`external/ebpr/Code/data.py`,
+`create_explainability_matrix` / `create_neighborhood`), so its memory cost is quadratic in
+catalogue size and lives in **CPU RAM, not GPU memory**. LastFM1K's raw item space is
+*tracks*, and that makes a full-catalogue run impossible on any ordinary machine.
+
+Measured directly from the raw 2.4GB file (19,150,868 plays, 992 users), not estimated:
+
+| Entity | `min_item_interactions` | Items | Similarity matrix (float64) | Interactions kept |
+|---|---|---|---|---|
+| track | none | 961,417 | **7,395 GB** | 100% |
+| track | 10 | 268,658 | 577 GB | 89.4% |
+| track | 50 | 66,409 | 35 GB | 67.0% |
+| track | 100 | 31,561 | 8.0 GB | 54.5% |
+| artist | none | 107,398 | 92 GB | 100% |
+| artist | 10 | 48,273 | 18.6 GB | 99.0% |
+| **artist** | **20** | **35,474** | **10.1 GB** | **98.1%** |
+| artist | 50 | 22,372 | 4.0 GB | 96.0% |
+
+Two things fall out of that table:
+
+- **Track level is not salvageable.** To fit in 32GB you have to filter down to ~100 plays
+  per track, which throws away **45% of all interactions** — that is no longer the same
+  dataset in any meaningful sense.
+- **Artist level is nearly free.** Aggregating plays to artist collapses the catalogue 9x
+  (961,417 -> 107,398) because the track catalogue is overwhelmingly a long tail of
+  near-singletons, while the artist catalogue is dense. At `min_item_interactions: 20` it
+  fits in 10GB while keeping 98% of the data.
+
+So `configs/*.yaml` set LastFM1K to `loader: lastfm1k_artist` with
+`filter: {min_item_interactions: 20}`. Verified end-to-end on the real file: **35,432 items,
+18,138,905 interactions, 10.3 GB peak** (similarity + interaction matrix resident together).
+
+This is also the more defensible choice scientifically, not just the cheaper one: the HetRec
+LastFM-2K release is artist-based, and AMBAR — the other music dataset in this study — is
+artist-based too, so the two are now directly comparable. **Report the filter threshold
+alongside results**: k-core filtering is standard recommender-systems preprocessing, but it
+is a real dataset-definition choice, not an implementation detail.
+
+`FilterConfig` (`min_item_interactions` / `min_user_interactions`) is available for every
+dataset and defaults to no filtering, so nothing else in the suite is affected. It applies
+iterative k-core (dropping rare items can push users below their threshold and vice versa),
+runs before the split and before `sample`, and is part of the persisted-split fingerprint —
+a split materialized under one filter will not be silently reused under another.
+
+**If you need to go smaller still**, `min_item_interactions: 50` gets artist level to 4 GB
+while still keeping 96% of interactions. Changing EBPR's dense matrices to a chunked or
+sparse top-N neighbourhood would remove the quadratic term entirely, but that means editing
+vendored method code and is not done here.
+
+## Implemented metrics
+
+Every metric below is selectable per-run from a config's `metrics:` block (`accuracy`,
+`fairness`, `explanation`) and lands in `results.parquet`'s `metric` column under the name
+in the first table column. Implementations live in `src/rexbench/metrics/`.
+
+### Accuracy (`metrics.accuracy`) — on recommendation lists
+
+| Name | What it measures | Source |
+|---|---|---|
+| `ndcg` | NDCG@k, averaged over users | Jarvelin & Kekalainen (2002), *Cumulated Gain-based Evaluation of IR Techniques*, ACM TOIS 20(4):422–446 — [doi:10.1145/582415.582418](https://doi.org/10.1145/582415.582418) |
+| `map` | Mean Average Precision@k | Manning, Raghavan & Schutze (2008), *Introduction to Information Retrieval*, CUP, §8.4 — [online](https://nlp.stanford.edu/IR-book/html/htmledition/evaluation-of-ranked-retrieval-results-1.html) |
+
+### Fairness (`metrics.fairness`) — on recommendation lists
+
+**User-side** — how unequally recommendation *quality* is spread across users:
+
+| Name | What it measures | Source |
+|---|---|---|
+| `gini` | Gini coefficient of the per-user NDCG@k distribution | Standard Gini coefficient; the predecessor pipeline cited no recsys source for this user-side use. Degenerate-case handling is rexbench's own fix (AUDIT.md §5) |
+| `variance` | Mean squared pairwise difference of per-user NDCG@k | No external source — the predecessor pipeline's own O(n²) pairwise form, not textbook variance (preserved verbatim) |
+
+**Item-side (provider-side)** — how *exposure* is spread across the catalog:
+
+| Name | What it measures | Source |
+|---|---|---|
+| `entropy` | Shannon entropy of the item-appearance distribution across all top-k lists. Not normalized by log\|I\|, so not comparable across catalog sizes (preserved as-is) | Shannon (1948), *A Mathematical Theory of Communication*, BSTJ 27(3):379–423 — [doi:10.1002/j.1538-7305.1948.tb01338.x](https://doi.org/10.1002/j.1538-7305.1948.tb01338.x); used as entropy-diversity for recommendations by Adomavicius & Kwon (2012) |
+| `arp` | Average Recommendation Popularity — mean training popularity of recommended items. Reported in interaction-count units, not [0,1] | Abdollahpouri & Burke (2019), *Reducing Popularity Bias in Recommendation Over Time* — [arXiv:1906.11711](https://arxiv.org/abs/1906.11711) |
+| `arp_normalized` | ARP min-max normalized to the dataset's own popularity range, so it's comparable across datasets | rexbench-specific (AUDIT.md §1.3) — no external source |
+| `tail_coverage` | APLT — per-user share of the top-k list that is long-tail, averaged over users. Stored as `tail_coverage_rec` to disambiguate from the explanation metric of the same name | Abdollahpouri, Burke & Mobasher (2019), *Managing Popularity Bias in Recommender Systems with Personalized Re-ranking*, FLAIRS-32, pp. 413–418 — [arXiv:1901.07555](https://arxiv.org/abs/1901.07555) |
+| `item_coverage` | Catalog coverage / aggregate diversity — fraction of the catalog appearing in *any* user's top-k | Adomavicius & Kwon (2012), *Improving Aggregate Recommendation Diversity Using Ranking-Based Techniques*, IEEE TKDE 24(5):896–911 — [doi:10.1109/TKDE.2011.15](https://doi.org/10.1109/TKDE.2011.15) |
+| `item_exposure_gini` | Gini of per-item exposure over the full catalog (never-recommended items counted as zeros). The item-side counterpart to `gini` | Fleder & Hosanagar (2009), *Blockbuster Culture's Next Rise or Fall*, Management Science 55(5):697–712 — [doi:10.1287/mnsc.1080.0974](https://doi.org/10.1287/mnsc.1080.0974); also used by Adomavicius & Kwon (2012) |
+| `tail_item_coverage` | Fraction of *distinct* long-tail items recommended to at least one user — catches the case where a good `tail_coverage` is really one tail item shown to everyone | Abdollahpouri et al. (2019) motivate this when introducing ACLT ([arXiv:1901.07555](https://arxiv.org/abs/1901.07555)); see the deviation note below |
+| `tail_exposure_share` | Share of *position-discounted* exposure (1/log₂(1+rank)) going to long-tail items — penalizes burying tail items at the bottom of the list | Singh & Joachims (2018), *Fairness of Exposure in Rankings*, KDD '18 — [arXiv:1802.07281](https://arxiv.org/abs/1802.07281); Biega, Gummadi & Weikum (2018), *Equity of Attention*, SIGIR '18, pp. 405–414 — [doi:10.1145/3209978.3210063](https://doi.org/10.1145/3209978.3210063) |
+
+Two notes worth knowing when citing these:
+
+- **`tail_item_coverage` is not ACLT verbatim.** Abdollahpouri et al. state exactly this
+  metric's motivation when introducing ACLT ("One problem with APLT is that it could be high
+  even if all users get the same set of long tail items"), but their printed ACLT formula is
+  an average *count* of tail items per list — which is APLT rescaled by list length and does
+  not actually measure distinct coverage. This implements the stated intent, normalized to
+  [0,1]. Cite it as tail-restricted catalog coverage, not as ACLT.
+- **`tail_coverage` (APLT) was fixed, and its numbers changed.** The predecessor pipeline
+  computed `tail_count / len(predictions_df)` over the entire prediction frame. That was
+  wrong twice: it never truncated to top-k (so `tail_coverage@5` and `tail_coverage@10` came
+  out identical in every run — the `k` column was meaningless for this metric), and it
+  pooled all users into one ratio instead of averaging per-user percentages, silently
+  weighting users with longer lists more heavily. Both are corrected to match APLT's
+  published formula. **Results for this metric from runs predating the fix are not
+  comparable** and should be regenerated.
+
+A useful survey covering most of the item-side metrics above and their attributions:
+Klimashevskaia, Jannach, Elahi & Trattner (2024), *A Survey on Popularity Bias in Recommender
+Systems*, UMUAI — [doi:10.1007/s11257-024-09406-0](https://doi.org/10.1007/s11257-024-09406-0).
+
+### Explanation quality (`metrics.explanation`) — on explanation sets
+
+Computed only for (model, explainer) pairs that produced explanations (AR/KNN today).
+**Citations pending** — these were ported verbatim from the predecessor pipeline, which
+documented no sources, and the definitions have not yet been matched against the literature.
+They are listed here for completeness, not as citable implementations of named metrics.
+
+| Name | What it measures |
+|---|---|
+| `fidelity` | How often the explanation set contains the recommended item |
+| `tail_coverage` | Share of explanation items that are long-tail (distinct from the recommendation-side metric of the same short name) |
+| `diversity` | How varied explanation sets are across users |
+| `explanation_arp` | Mean popularity of items inside explanation sets |
+| `coverage` | Fraction of the catalog appearing in any explanation |
+| `personalization` | 1 − mean pairwise Jaccard similarity between users' explanation sets |
+
 ## Running
 
 ```bash
@@ -278,9 +419,9 @@ any model's config declares one — see Hyperparameter optimization above).
 
 Run without the merged environment installed:
 ```bash
-PYTHONPATH=src python3 -m pytest tests/test_config_schema.py tests/test_metrics_validate.py tests/test_dataset_bundle.py tests/test_hpo.py -v
+PYTHONPATH=src python3 -m pytest tests/test_config_schema.py tests/test_metrics_validate.py tests/test_dataset_bundle.py tests/test_hpo.py tests/test_significance.py tests/test_item_side_fairness.py tests/test_kcore_filter.py -v
 ```
-31/31 passing — covers the config schema (including all three real configs, the per-dataset
+77/77 passing — covers the config schema (including all three real configs, the per-dataset
 `dataset_overrides` mechanism, and `HPOConfig`/`HPOParamSpec` validation), the dataset/split/
 tail-item logic (dependency-free after absorbing the predecessor pipeline's loaders —
 `core/dataset.py` no longer needs RecBole just to import), the HPO grid/random sampling
@@ -290,6 +431,24 @@ lives in a separate module that doesn't), and, most importantly, the Gini fix (A
 section 5) against
 the exact degenerate inputs traced there: all-zero scores and a single-user dict now return
 `NaN`, all-equal-nonzero scores return `0.0`, and the normal case is unchanged.
+
+`test_item_side_fairness.py` covers the four item-side fairness metrics
+(`item_coverage`, `item_exposure_gini`, `tail_item_coverage`, `tail_exposure_share`) against
+hand-computed expected values rather than snapshots — including the discrete Gini maximum
+`(n-1)/n` for fully concentrated exposure, the position-discount weights `1/log2(1+rank)`,
+and the specific case `tail_item_coverage` exists to catch (one tail item shown to every
+user scores 1/|tail|, not 1.0).
+
+`test_significance.py` covers another real bug found this way: `rexbench stats` used to crash
+(`scipy.stats.friedmanchisquare`: "Array shapes are incompatible for broadcasting") on any
+metric where a model doesn't apply to every dataset — PGPR (ml100k/ml1m only) being the
+obvious case. `friedman_test` was independently `dropna()`-ing each column, producing
+differently-sized groups for a same-shape test; `quade_test`/`kendall_w` had no such
+handling at all and would have silently returned `NaN` throughout instead of crashing. Fixed
+with a shared `complete_cases()` (listwise deletion — restrict to datasets where every model
+in the pivot has a value, the standard approach for an unbalanced repeated-measures design),
+used consistently by all three, plus a `cmd_stats` check that skips a metric/k combination
+that doesn't have at least 2 complete-case datasets after that restriction.
 
 Also confirmed empirically (loading every dataset's real raw data with rexbench's own
 loaders, no torch needed for this part): `amazon_digital_music` crashed on every load

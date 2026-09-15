@@ -17,6 +17,17 @@ dependencies = [
     "scipy>=1.10",
     "torch>=2.0",
     "recbole>=1.2",
+    # recbole's own model registry eagerly imports every model in
+    # recbole.model.general_recommender (its __init__.py imports all ~32 of them
+    # regardless of which one you actually asked for), and rexbench's own
+    # explainers/_bridge.py imports recbole.quick_start.quick_start directly -- both
+    # unconditionally need these two even though rexbench never trains LDiffRec or calls
+    # RecBole's own hyperparameter search. Verified against RecBole 1.2.1's actual source
+    # (not guessed) that no *other* eagerly-loaded model needs an undeclared dependency
+    # (NCL/faiss and NNCF/networkx+community are real but method-scoped, not triggered by
+    # importing the package).
+    "kmeans-pytorch",
+    "ray[tune]",
     "scikit-learn>=1.0",
     "mlxtend<0.23",
     "pydantic>=2.0",
@@ -25,6 +36,16 @@ dependencies = [
     "easydict>=1.9",
     "tqdm>=4.60",
     "scikit-posthocs>=0.7",
+    # python-box: recoxplainer/config.py needs it (`from box import Box`), but
+    # external/recoxplainer's own setup.py declares no install_requires at all -- its
+    # requirements.txt is a full, stale notebook-environment snapshot (torch==1.7.1,
+    # numpy==1.19.5, scikit-learn==0.24.1, plus unrelated Jupyter/Dash packages) that must
+    # NOT be pip-installed wholesale, since it would downgrade this environment's pinned
+    # torch/numpy/scikit-learn below what RecBole/EBPR/PGPR need. Verified against the
+    # actual recoxplainer source that the code path rexbench's explainers/_bridge.py
+    # touches (config.py, data_reader/, all four explain/ classes, recommender/) needs
+    # nothing else beyond what's already declared above.
+    "python-box",
     # recoxplainer: install separately from external/recoxplainer (the actively-patched
     # fork, added as a git submodule) — see README.md#environment.
 ]

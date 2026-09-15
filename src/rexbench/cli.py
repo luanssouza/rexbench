@@ -14,7 +14,7 @@ import pandas as pd
 from rexbench.config.load import load_config
 from rexbench.core.determinism import build_manifest, resolve_device
 from rexbench.stats.aggregate import aggregate_across_seeds, wide_pivot
-from rexbench.stats.significance import friedman_test, kendall_w, quade_test
+from rexbench.stats.significance import complete_cases, friedman_test, kendall_w, quade_test
 
 
 def _run_id(experiment_name: str) -> str:
@@ -124,7 +124,12 @@ def cmd_stats(args: argparse.Namespace) -> None:
     for metric in metrics:
         for k in sorted(agg.loc[agg["metric"] == metric, "k"].dropna().unique()) or [None]:
             pivot = wide_pivot(agg, metric, k)
-            if pivot.shape[0] < 2 or pivot.shape[1] < 2:
+            # Friedman/Quade/Kendall's W need a fully populated dataset x model matrix --
+            # check the shape *after* dropping datasets any model is missing (e.g. PGPR,
+            # which only applies to ml100k/ml1m), not before, so a metric/k combination
+            # that only looks big enough before accounting for that isn't silently reported
+            # with NaN statistics (see stats/significance.py's complete_cases).
+            if complete_cases(pivot).shape[0] < 2 or pivot.shape[1] < 2:
                 continue
             key = f"{metric}@{k}" if k is not None else metric
             report[key] = {

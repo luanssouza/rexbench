@@ -45,6 +45,28 @@ def _load_lastfm1k(path: str) -> pd.DataFrame:
     return df
 
 
+def _load_lastfm1k_artist(path: str) -> pd.DataFrame:
+    """LastFM1K aggregated to ARTIST level (column 2, `artid`) instead of track level
+    (column 4, `traid`, which _load_lastfm1k above uses).
+
+    This is a dataset-definition choice with a large practical consequence: the raw file has
+    961,417 distinct tracks but only 107,398 distinct artists (measured, not estimated), and
+    EBPR's item x item similarity matrix is dense — so track level needs 7.4 TB of RAM and
+    artist level needs 92 GB, before any filtering. Combined with FilterConfig it becomes
+    runnable on ordinary hardware; see README.md's "LastFM1K memory" section.
+
+    Artist-level LastFM is also the more standard framing in the recommender-systems
+    literature (the HetRec LastFM-2K release is artist-based), and it makes this dataset
+    directly comparable to AMBAR, the other music dataset in this study, which is likewise
+    artist-based.
+    """
+    df = pd.read_csv(path, sep="\t", on_bad_lines="skip", header=None)
+    df = df[[0, 2, 1]]
+    df.columns = ["user_id", "item_id", "timestamp"]
+    df.dropna(inplace=True)
+    return df
+
+
 def _load_ambar(path: str) -> pd.DataFrame:
     df = pd.read_csv(path)
     df.columns = ["user_id", "item_id", "rating"]
@@ -121,6 +143,7 @@ _LOADERS = {
     "ml100k": _load_ml100k,
     "ml1m": _load_ml1m,
     "lastfm1k": _load_lastfm1k,
+    "lastfm1k_artist": _load_lastfm1k_artist,
     "ambar": _load_ambar,
     "coat": lambda raw: _load_coat(raw["train"], raw["test"]),
     "electronics": _load_electronics,
@@ -138,11 +161,44 @@ def load_raw(config: DatasetConfig) -> pd.DataFrame:
     if "timestamp" not in df.columns:
         df = df.assign(timestamp=0)
     df = df[CANONICAL_COLUMNS].reset_index(drop=True)
+    # Filter BEFORE sample: filtering defines what the dataset is for this experiment,
+    # sampling is a test-time reduction applied on top of that definition.
+    df = _apply_kcore_filter(df, config.filter)
     if config.sample.max_users is not None:
         df = _subsample_users(df, config.sample.max_users, config.sample.seed)
     if config.sample.max_interactions_per_user is not None:
         df = _cap_interactions_per_user(df, config.sample.max_interactions_per_user, config.sample.seed)
     return df
+
+
+def _apply_kcore_filter(df: pd.DataFrame, filter_config) -> pd.DataFrame:
+    """Iterative k-core: repeatedly drop under-threshold items and users until neither
+    changes. A single pass is not enough — dropping a rare item can push a user below the
+    user threshold, which in turn can push further items below the item threshold.
+
+    Stops early once stable, and hard-stops at `max_iterations` (a degenerate config can
+    otherwise shrink the data one row at a time). Returns df unchanged when neither
+    threshold is set, which is the default for every dataset.
+    """
+    min_item = filter_config.min_item_interactions
+    min_user = filter_config.min_user_interactions
+    if min_item is None and min_user is None:
+        return df
+
+    for _ in range(filter_config.max_iterations):
+        before = len(df)
+        if min_item is not None:
+            item_counts = df["item_id"].value_counts()
+            keep_items = item_counts[item_counts >= min_item].index
+            df = df[df["item_id"].isin(keep_items)]
+        if min_user is not None:
+            user_counts = df["user_id"].value_counts()
+            keep_users = user_counts[user_counts >= min_user].index
+            df = df[df["user_id"].isin(keep_users)]
+        if len(df) == before:
+            break
+
+    return df.reset_index(drop=True)
 
 
 def _subsample_users(df: pd.DataFrame, max_users: int, seed: int) -> pd.DataFrame:
@@ -283,6 +339,11 @@ def _split_settings(config: DatasetConfig) -> dict:
             "max_users": config.sample.max_users,
             "max_interactions_per_user": config.sample.max_interactions_per_user,
             "seed": config.sample.seed,
+        },
+        "filter": {
+            "min_item_interactions": config.filter.min_item_interactions,
+            "min_user_interactions": config.filter.min_user_interactions,
+            "max_iterations": config.filter.max_iterations,
         },
     }
 

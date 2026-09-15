@@ -70,8 +70,9 @@ datasets:
     kg: {status: needs_construction}
 
   - name: lastfm1k
-    loader: lastfm1k
+    loader: lastfm1k_artist
     raw_path: data/raw/lastfm1k/userid-timestamp-artid-artname-traid-traname.tsv
+    filter: {min_item_interactions: 20}   # 961,417 tracks -> 35,474 artists; see README "LastFM1K memory"
     split: {strategy: random, val_size: 0.1, test_size: 0.2, random_state: 200, store_dir: data/splits/lastfm1k}
     topk: [5, 10]
     tail_fraction: 0.20
@@ -208,7 +209,10 @@ explainers: []
 
 metrics:
   accuracy: [ndcg, map]
-  fairness: [gini, variance, entropy, arp, arp_normalized, tail_coverage]
+  # gini/variance here are USER-side (inequality of per-user NDCG); the item_* /
+  # tail_* entries are item-side (how exposure spreads over the catalog).
+  fairness: [gini, variance, entropy, arp, arp_normalized, tail_coverage,
+             item_coverage, item_exposure_gini, tail_item_coverage, tail_exposure_share]
 
 statistics:
   tests: [friedman, quade, nemenyi, kendall_w]

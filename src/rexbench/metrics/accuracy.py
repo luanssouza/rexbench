@@ -30,6 +30,8 @@ def dcg_at_k(r: Sequence, k: int, method: int = 1) -> float:
 
 @validated_range(0.0, 1.0)
 def ndcg_at_k(r: Sequence, k: int, method: int = 0) -> float:
+    """NDCG@k. Jarvelin & Kekalainen (2002), "Cumulated Gain-based Evaluation of IR
+    Techniques", ACM TOIS 20(4):422-446. https://doi.org/10.1145/582415.582418"""
     dcg_max = dcg_at_k(sorted(r, reverse=True), k, method)
     if not dcg_max:
         return 0.0
@@ -79,6 +81,10 @@ def ap_at_k(topk_items: Sequence, rel_set, top_k: int) -> float:
 
 @validated_range(0.0, 1.0)
 def map_at_k(predictions_df: pd.DataFrame, user_test_dict: Dict, top_k: int = 10) -> float:
+    """Mean Average Precision@k. Manning, Raghavan & Schutze (2008), "Introduction to
+    Information Retrieval", Cambridge University Press, section 8.4.
+    https://nlp.stanford.edu/IR-book/html/htmledition/evaluation-of-ranked-retrieval-results-1.html
+    """
     groups = predictions_df.groupby(U_COL)
     ap_scores = []
     for uid, rel_items in user_test_dict.items():
@@ -92,8 +98,16 @@ def map_at_k(predictions_df: pd.DataFrame, user_test_dict: Dict, top_k: int = 10
 def average_recommendation_popularity(
     predictions_df: pd.DataFrame, item_popularity: pd.Series, top_k: int = 10
 ) -> float:
-    """Raw ARP (Elliot-framework definition) — not range-bounded, by construction (AUDIT.md
-    1.3 flagged the raw form as reported in interaction-count units, not [0,1])."""
+    """Average Recommendation Popularity: mean training-set popularity of the items in each
+    user's top-k list, averaged over users. Not range-bounded, by construction (AUDIT.md 1.3
+    flagged the raw form as reported in interaction-count units, not [0,1]).
+
+    Abdollahpouri & Burke (2019), "Reducing Popularity Bias in Recommendation Over Time",
+    arXiv:1906.11711. https://arxiv.org/abs/1906.11711
+    (ARP's attribution to this paper follows Klimashevskaia, Jannach, Elahi & Trattner
+    (2024), "A Survey on Popularity Bias in Recommender Systems", UMUAI, Table 4.
+    https://doi.org/10.1007/s11257-024-09406-0)
+    """
     topk_df = (
         predictions_df
         .sort_values([U_COL, R_COL], ascending=[True, False])
@@ -113,7 +127,7 @@ def average_recommendation_popularity(
 def average_recommendation_popularity_normalized(
     predictions_df: pd.DataFrame, item_popularity: pd.Series, top_k: int = 10
 ) -> float:
-    """New metric (AUDIT.md 1.3): min-max normalizes raw ARP against the dataset's actual
+    """New metric (AUDIT.md 1.3), rexbench-specific — no external source: min-max normalizes raw ARP against the dataset's actual
     popularity range [min(item_popularity), max(item_popularity)], so it lands in [0,1] and
     is comparable across datasets with very different interaction-count scales."""
     raw = average_recommendation_popularity(predictions_df, item_popularity, top_k)

@@ -81,6 +81,31 @@ class SampleConfig(Frozen):
     seed: int = 200
 
 
+class FilterConfig(Frozen):
+    """Iterative k-core filtering: drop items with fewer than `min_item_interactions` and
+    users with fewer than `min_user_interactions`, repeating until stable (removing items
+    can push a user below their threshold and vice versa). Applied to the raw data BEFORE
+    the split and before `sample` — it defines what the dataset IS for this experiment,
+    rather than being a test-time reduction the way SampleConfig is.
+
+    Both default to None (no filtering), so no existing dataset's numbers change unless its
+    config opts in.
+
+    The motivating case is lastfm1k: its raw item space is 961,417 distinct TRACKS, and
+    EBPR's item x item cosine-similarity matrix is dense, so a full-catalogue run needs
+    961,417^2 * 8 bytes = 7.4 TB of RAM. Filtering is what makes that dataset runnable at
+    all on ordinary hardware — see README.md's "LastFM1K memory" section for the measured
+    catalogue/memory/data-retention trade-off at each threshold.
+
+    k-core filtering is standard recommender-systems preprocessing, not a rexbench
+    invention; report the threshold used alongside results, since it is a real
+    dataset-definition choice.
+    """
+    min_item_interactions: int | None = None
+    min_user_interactions: int | None = None
+    max_iterations: int = 20
+
+
 class DatasetConfig(Frozen):
     name: str
     loader: str
@@ -90,6 +115,7 @@ class DatasetConfig(Frozen):
     topk: list[int] = Field(default_factory=lambda: [5, 10])
     tail_fraction: float = 0.20
     kg: KgConfig = KgConfig(status="unsupported")
+    filter: FilterConfig = FilterConfig()
     sample: SampleConfig = SampleConfig()
 
     @model_validator(mode="after")
@@ -224,7 +250,13 @@ class MetricsConfig(Frozen):
     # audit flagged between the two similarly-named metrics.
     accuracy: list[str] = Field(default_factory=lambda: ["ndcg", "map"])
     fairness: list[str] = Field(
-        default_factory=lambda: ["gini", "variance", "entropy", "arp", "arp_normalized"]
+        default_factory=lambda: [
+            "gini", "variance", "entropy", "arp", "arp_normalized",
+            # item-side: gini/variance above are USER-side (inequality of per-user
+            # NDCG); these four measure how exposure spreads over the catalog.
+            "item_coverage", "item_exposure_gini", "tail_item_coverage",
+            "tail_exposure_share",
+        ]
     )
     explanation: list[str] = Field(
         default_factory=lambda: [
