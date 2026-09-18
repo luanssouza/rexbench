@@ -62,4 +62,14 @@ def test_gini_never_returns_out_of_range_value():
 
 
 def test_variance_unchanged_formula():
-    assert variance({1: 1.0, 2: 3.0}) == pytest.approx(2.0)
+    """Same formula as always — mean squared pairwise difference over n^2 — but exercised
+    inside variance's documented domain (per-user NDCG, so scores in [0,1]).
+
+    It used to pass {1: 1.0, 2: 3.0}, which is outside that domain and yields 2.0. That went
+    unnoticed while variance declared no range; now that it declares [0, 0.5] (the true
+    maximum for [0,1] inputs, reached with half the users at 0 and half at 1) the old inputs
+    correctly trip MetricRangeError. The formula itself is unchanged: for {0.0, 1.0} the
+    ordered pairs give (0-1)^2 + (1-0)^2 = 2, over n^2 = 4, i.e. 0.5.
+    """
+    assert variance({1: 0.0, 2: 1.0}) == pytest.approx(0.5)
+    assert variance({1: 0.25, 2: 0.75}) == pytest.approx(2 * 0.5 ** 2 / 4)  # diff is 0.5

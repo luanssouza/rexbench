@@ -7,6 +7,7 @@ callers, since every predictions_df/rel_dict in rexbench always uses the same sc
 """
 from __future__ import annotations
 
+import math
 from typing import Dict, Sequence
 
 import numpy as np
@@ -93,6 +94,7 @@ def dataset_ndcg_k(predictions_df: pd.DataFrame, user_test_dict: Dict, top_k: in
     return out
 
 
+@validated_range(0.0, 1.0)
 def ap_at_k(topk_items: Sequence, rel_set, top_k: int) -> float:
     m = len(rel_set)
     if m == 0:
@@ -122,6 +124,7 @@ def map_at_k(predictions_df: pd.DataFrame, user_test_dict: Dict, top_k: int = 10
     return sum(ap_scores) / len(ap_scores) if ap_scores else 0.0
 
 
+@validated_range(0.0, math.inf)
 def average_recommendation_popularity(
     predictions_df: pd.DataFrame, item_popularity: pd.Series, top_k: int = 10
 ) -> float:

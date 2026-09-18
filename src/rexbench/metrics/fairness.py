@@ -43,12 +43,24 @@ def _topk_frame(predictions_df: pd.DataFrame, top_k: int) -> pd.DataFrame:
 
 
 
+@validated_range(0.0, 0.5, allow_nan=True)
 def variance(scores_per_user: Dict) -> float:
     """USER-side: mean squared pairwise difference of per-user NDCG. No external source —
     this is the predecessor pipeline's own O(n^2) pairwise form, not textbook variance
-    (AUDIT.md 1.3/4.9 confirmed the formula and it is preserved exactly)."""
+    (AUDIT.md 1.3/4.9 confirmed the formula and it is preserved exactly).
+
+    Range is [0, 0.5], NOT [0, 1]: with scores in [0,1] the maximum is reached when half the
+    users score 0 and half score 1, giving sum = n^2/2 over n^2 (verified numerically).
+    Declaring [0,1] would have let a genuinely impossible value through unnoticed.
+
+    FIXED: an empty score dict raised ZeroDivisionError (n = 0). It now returns NaN, matching
+    gini() above, so "no users to compare" is recorded as undefined rather than crashing the
+    whole (dataset, model, seed) combination.
+    """
     keys = list(scores_per_user.keys())
     n = len(keys)
+    if n < 2:
+        return float("nan")
     total = sum(
         (scores_per_user[kx] - scores_per_user[ky]) ** 2
         for kx in keys
@@ -93,6 +105,7 @@ def _item_appearance_probabilities(predictions_df: pd.DataFrame):
     return [(i, cnt / n_lists) for i, cnt in items.items()]
 
 
+@validated_range(0.0, math.inf)
 def entropy(predictions_df: pd.DataFrame, top_k: int) -> float:
     """Shannon entropy of the item-appearance distribution across all top-k lists — higher
     means exposure is spread over more items. NOT normalized by max entropy (log |I|), by
@@ -106,7 +119,10 @@ def entropy(predictions_df: pd.DataFrame, top_k: int) -> float:
     """
     topk_df = _topk_frame(predictions_df, top_k)
     probs = _item_appearance_probabilities(topk_df)
-    return -sum(p * math.log(p) for _, p in probs)
+    # `+ 0.0` normalises negative zero. With a single item at p=1.0 the sum is -0.0, which
+    # is not < 0 but serialises as "-0.000000" in results.csv and reads as a negative
+    # entropy. Adding 0.0 maps -0.0 -> 0.0 and leaves every other value untouched.
+    return -sum(p * math.log(p) for _, p in probs) + 0.0
 
 
 @validated_range(0.0, 1.0)

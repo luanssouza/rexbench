@@ -432,6 +432,72 @@ every model. If you want held-out-only candidates, it has to change in all three
 concept), while EBPR and RecBole train on `train` alone. PGPR therefore sees ~10% more
 interactions than the others. Flag this in any head-to-head table until it is reconciled.
 
+## Metric reference: valid ranges
+
+Every metric that reaches `results.parquet` declares a range, enforced at runtime by
+`@validated_range` (`metrics/validate.py`). An out-of-range, non-NaN return raises
+`MetricRangeError`, which `core/runner.py` records as a `degenerate` failure row instead of
+letting the value into the results table. NaN is only accepted where it means "genuinely
+undefined", never "zero".
+
+### Accuracy — `metrics.accuracy`
+
+| Name | Range | NaN? | Better | Notes |
+|---|---|---|---|---|
+| `ndcg` | [0, 1] | no | higher | Ideal is `min(\|relevant\|, k)`; see the evaluation-protocol section |
+| `map` | [0, 1] | no | higher | Normalised by `min(\|relevant\|, k)` |
+
+### Fairness — `metrics.fairness`
+
+**User-side** (inequality of recommendation *quality* across users):
+
+| Name | Range | NaN? | Better | Notes |
+|---|---|---|---|---|
+| `gini` | [0, 1] | **yes** | lower | NaN when fewer than 2 users, or all per-user NDCG are 0. `0.0` means perfect equality |
+| `variance` | **[0, 0.5]** | **yes** | lower | Not [0,1]: max is 0.5, with half the users at 0 and half at 1. NaN when fewer than 2 users |
+
+**Item-side** (how *exposure* spreads over the catalogue):
+
+| Name | Range | NaN? | Better | Notes |
+|---|---|---|---|---|
+| `entropy` | [0, ∞) | no | higher | Unbounded above: max is `log \|I\|`, so **not comparable across datasets** with different catalogue sizes |
+| `arp` | [0, ∞) | no | lower | Interaction-count units, not normalised — not comparable across datasets |
+| `arp_normalized` | [0, 1] | no | lower | `arp` min-max scaled to the dataset's own popularity range |
+| `tail_coverage` | [0, 1] | no | higher | APLT. Stored as `tail_coverage_rec` |
+| `item_coverage` | [0, 1] | no | higher | Catalogue coverage / aggregate diversity |
+| `item_exposure_gini` | [0, 1] | **yes** | lower | NaN when nothing was recommended at all |
+| `tail_item_coverage` | [0, 1] | no | higher | Fraction of *distinct* tail items reached |
+| `tail_exposure_share` | [0, 1] | no | higher | Position-discounted |
+
+### Explanation quality — `metrics.explanation`
+
+| Name | Range | NaN? | Better | Notes |
+|---|---|---|---|---|
+| `fidelity` | [0, 1] | no | higher | |
+| `tail_coverage` | [0, 1] | **yes** | higher | NaN when every explanation set is empty |
+| `diversity` | [0, ∞) | no | higher | Entropy-shaped, so unbounded — not comparable across datasets |
+| `explanation_arp` | [0, ∞) | no | lower | Interaction-count units |
+| `coverage` | [0, 1] | no | higher | |
+| `personalization` | [0, 1] | **yes** | higher | NaN for a single user (no pair to compare) |
+
+**Four ranges are not [0, 1]** — `variance` (≤ 0.5) and the four `[0, ∞)` metrics. Reporting
+any of the unbounded ones side by side across datasets is misleading; normalise or report
+per-dataset.
+
+### Defects this audit found and fixed
+
+- **`entropy` and `diversity` returned negative zero.** With a single item at `p = 1.0`,
+  `-sum(p·log p)` is `-0.0` — not `< 0`, so `@validated_range` let it through, but it
+  serialises to `results.csv` as `-0.000000` and reads as a negative entropy. Both now
+  normalise to `+0.0`.
+- **`variance({})` raised `ZeroDivisionError`**, killing the whole (dataset, model, seed)
+  combination rather than recording one undefined value. It now returns NaN, matching `gini`.
+- **`variance` declared no range at all**, so a value above its true 0.5 maximum could have
+  reached the results table unnoticed.
+- **Seven metrics declared no range**: `variance`, `entropy`, `ap_at_k`, `arp`,
+  `explanation_arp`, `explanation_diversity`, plus `explanation_coverage`'s edge cases. All
+  now declared and covered by boundary tests.
+
 ## Implemented metrics
 
 Every metric below is selectable per-run from a config's `metrics:` block (`accuracy`,
@@ -541,13 +607,13 @@ any model's config declares one — see Hyperparameter optimization above).
 
 In the full merged environment (torch present) the whole suite runs:
 ```bash
-PYTHONPATH=src python3 -m pytest tests/ -q          # 174 passed
+PYTHONPATH=src python3 -m pytest tests/ -q          # 204 passed
 ```
 Without torch installed, the adapter-level tests skip and the rest still run:
 ```bash
 PYTHONPATH=src python3 -m pytest tests/test_config_schema.py tests/test_metrics_validate.py tests/test_dataset_bundle.py tests/test_hpo.py tests/test_significance.py tests/test_item_side_fairness.py tests/test_kcore_filter.py -v
 ```
-103/103 passing there; 174/174 — covers the config schema (including all three real configs, the per-dataset
+103/103 passing there; 204/204 — covers the config schema (including all three real configs, the per-dataset
 `dataset_overrides` mechanism, and `HPOConfig`/`HPOParamSpec` validation), the dataset/split/
 tail-item logic (dependency-free after absorbing the predecessor pipeline's loaders —
 `core/dataset.py` no longer needs RecBole just to import), the HPO grid/random sampling

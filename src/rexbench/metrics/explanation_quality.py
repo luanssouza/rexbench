@@ -54,11 +54,13 @@ def _explanation_item_appearance_probabilities(df: pd.DataFrame, exp_col: str = 
     return [(i, cnt / n_rows) for i, cnt in counts.items()]
 
 
+@validated_range(0.0, math.inf)
 def explanation_diversity(df: pd.DataFrame, exp_col: str = EXP_COL) -> float:
     probs = _explanation_item_appearance_probabilities(df, exp_col)
-    return -sum(p * math.log(p) for _, p in probs if p > 0)
+    return (-sum(p * math.log(p) for _, p in probs if p > 0)) + 0.0  # normalises negative zero, see fairness.entropy
 
 
+@validated_range(0.0, math.inf)
 def explanation_arp(df: pd.DataFrame, item_popularity: pd.Series, exp_col: str = EXP_COL) -> float:
     pops = [item_popularity.get(item_id, 0) for exp_set in df[exp_col] for item_id in exp_set]
     return sum(pops) / len(pops) if pops else 0.0
