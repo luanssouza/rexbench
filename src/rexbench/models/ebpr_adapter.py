@@ -58,6 +58,15 @@ def _chdir(path: Path):
         os.chdir(previous)
 
 
+def _leave_one_out(split: pd.DataFrame) -> pd.DataFrame:
+    """One held-out row per user — the most recent by timestamp, ties broken by first
+    occurrence. This is the shape Engine.evaluate() expects; see the note in fit()."""
+    if split.empty:
+        return split
+    ordered = split.sort_values("timestamp", ascending=False, kind="mergesort")
+    return ordered.groupby("user_id", sort=False, as_index=False).head(1).reset_index(drop=True)
+
+
 class EBPRModelAdapter(ModelAdapter):
     family = "ebpr"
 
@@ -157,12 +166,30 @@ class EBPRModelAdapter(ModelAdapter):
         # recommend(). This also stops dataset.val from being silently discarded, which is
         # what left items missing from the crosstab and caused the KeyError padding bug.
         #
+        # The selection split is reduced to ONE held-out item per user by _leave_one_out
+        # below, because Engine.evaluate() is a leave-one-out evaluator: it ranks each user's
+        # single held-out item against 100 sampled negatives. Handing it rexbench's random
+        # 10% split (11-17 items per user) broke it two ways. Semantically, each of those
+        # items was ranked against the same negatives and counted separately, so the reported
+        # HR/NDCG were not LOO quantities at all. Mechanically, metrics.py's
+        # `pd.merge(full, test, on='user')` multiplies each user's rows by their own number
+        # of held-out items: measured 12x for ml100k (92k -> 1.1M rows) and 19.5x for ml1m
+        # (600k -> 11.7M), which is where ~80% of evaluate()'s runtime went (cProfile:
+        # 367s of 459s inside the `subjects` setter, in groupby.rank and sort_values).
+        #
+        # Picking the most RECENT held-out interaction matches EBPR's own convention: its
+        # _split_loo uses rank_latest == 1 when it derives a LOO split itself.
+        #
+        # This only affects which epoch's checkpoint is kept. The numbers rexbench reports
+        # still come from recommend() scored against the FULL dataset.test, identically for
+        # every model.
+        #
         # split_val stays False on purpose: with a `test` column present, SampleGenerator's
         # _split_loo honours it verbatim (train = test==0, held-out = test==1) and does NOT
         # re-split internally. Passing split_val=True would make EBPR carve its own val out
         # of train, breaking the "same split for every model" contract -- the same class of
         # bug already fixed for RecBole.
-        selection_split = dataset.val if len(dataset.val) else dataset.test
+        selection_split = _leave_one_out(dataset.val if len(dataset.val) else dataset.test)
         ratings = pd.concat(
             [dataset.train.assign(test=0), selection_split.assign(test=1)], ignore_index=True
         ).rename(columns={"user_id": "userId", "item_id": "itemId"})[

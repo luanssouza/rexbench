@@ -7,8 +7,10 @@ prior state): PGPR's own train/test files use the exact same raw MovieLens ids a
 `u.data`/`ratings.dat` (verified against `myutils.py`'s `get_uid_to_kgid_mapping`/
 `get_product_id_kgid_mapping`, which key their lookup tables by that raw id — the same value
 already stored in `DatasetBundle.user_id_map`/`item_id_map`). `fit()` now regenerates PGPR's
-`train.txt`/`test.txt` (+ `.gz`) from `dataset.train`+`dataset.val` (merged — PGPR has no
-validation concept of its own and isn't wired into HPO, see README.md) and `dataset.test`,
+`train.txt`/`test.txt` (+ `.gz`) from `dataset.train` and `dataset.test` — train ONLY, the
+same rows every other model trains on (PGPR has no validation mechanism, so `dataset.val`
+simply goes unused rather than being folded into training, which would hand PGPR ~10% more
+data than EBPR/RecBole and confound any comparison),
 translated back to raw ids, so PGPR shares the exact same test rows as every other model on
 the dataset. Items with no KG entity node (a real, pre-existing gap — ml100k's KG covers
 1424/1682 movies, ml1m 3265/3706) are silently skipped by PGPR's own existing
@@ -220,7 +222,14 @@ class PGPRModelAdapter(ModelAdapter):
             runtime_dir = REPO_ROOT / "pgpr_runtime" / name
             _materialize_pgpr_dataset_dir(
                 runtime_dir, pgpr_kg_source,
-                train_df=pd.concat([dataset.train, dataset.val], ignore_index=True),
+                # dataset.train ONLY — not train+val. PGPR has no validation mechanism of
+                # its own, but merging val into its training set gave it ~10% more
+                # interactions than EBPR and RecBole, which train on `train` alone. That is a
+                # confound: any PGPR win could be the extra data rather than the method.
+                # Comparability requires the same training rows for every model; val simply
+                # goes unused here, exactly as an unused resource, which is the honest
+                # treatment for a model that cannot consume it.
+                train_df=dataset.train,
                 test_df=dataset.test,
                 user_id_map=dataset.user_id_map, item_id_map=dataset.item_id_map,
             )

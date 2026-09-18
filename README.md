@@ -428,9 +428,28 @@ explanation).
 the candidate set, so all three may recommend already-seen items. That is the same rule for
 every model. If you want held-out-only candidates, it has to change in all three at once.
 
-**Still asymmetric, and not yet resolved:** PGPR trains on `train + val` (it has no validation
-concept), while EBPR and RecBole train on `train` alone. PGPR therefore sees ~10% more
-interactions than the others. Flag this in any head-to-head table until it is reconciled.
+**Resolved: every model now trains on exactly `dataset.train`.** PGPR used to be handed
+`train + val`, giving it ~10% more interactions than EBPR and RecBole — a confound in which
+any PGPR win could have been the extra data rather than the method. It now trains on `train`
+alone; having no validation mechanism, it simply leaves `dataset.val` unused.
+
+**Resolved: EBPR's model selection is a real leave-one-out.** `Engine.evaluate()` ranks each
+user's *single* held-out item against 100 sampled negatives. It was being fed rexbench's
+random 10% validation split (11–17 items per user), which broke it twice. Semantically, each
+held-out item was ranked against the same negatives and counted separately, so the selection
+HR/NDCG were not leave-one-out quantities at all. Mechanically, `metrics.py`'s
+`pd.merge(full, test, on='user')` multiplied each user's rows by their own number of held-out
+items — measured 12x on ml100k (92k → 1.1M rows) and 19.5x on ml1m (600k → 11.7M) — which
+cProfile located as ~80% of `evaluate()`'s runtime (367 s of 459 s inside the `subjects`
+setter). The selection split is now reduced to one row per user, the most recent by
+timestamp, matching EBPR's own `_split_loo` convention. Reported metrics are unaffected: they
+still come from `recommend()` scored against the full `dataset.test`.
+
+| `evaluate()` | ml100k | ml1m |
+|---|---|---|
+| original | 436 s | 452 s |
+| after vectorising the explainability lookup | 11.7 s | 444.9 s |
+| after the leave-one-out reduction | **0.3 s** | **2.3 s** |
 
 ## Metric reference: valid ranges
 
@@ -607,13 +626,13 @@ any model's config declares one — see Hyperparameter optimization above).
 
 In the full merged environment (torch present) the whole suite runs:
 ```bash
-PYTHONPATH=src python3 -m pytest tests/ -q          # 204 passed
+PYTHONPATH=src python3 -m pytest tests/ -q          # 212 passed
 ```
 Without torch installed, the adapter-level tests skip and the rest still run:
 ```bash
 PYTHONPATH=src python3 -m pytest tests/test_config_schema.py tests/test_metrics_validate.py tests/test_dataset_bundle.py tests/test_hpo.py tests/test_significance.py tests/test_item_side_fairness.py tests/test_kcore_filter.py -v
 ```
-103/103 passing there; 204/204 — covers the config schema (including all three real configs, the per-dataset
+103/103 passing there; 212/212 — covers the config schema (including all three real configs, the per-dataset
 `dataset_overrides` mechanism, and `HPOConfig`/`HPOParamSpec` validation), the dataset/split/
 tail-item logic (dependency-free after absorbing the predecessor pipeline's loaders —
 `core/dataset.py` no longer needs RecBole just to import), the HPO grid/random sampling
