@@ -77,6 +77,38 @@ def _pip_freeze() -> list[str] | None:
 # corrections are auditable, not silent.
 DISCLOSED_CORRECTIONS = [
     {
+        "target": "external/ebpr/Code/data.py (SampleGenerator.__init__, 2 sites)",
+        "change": "random.sample(x, 100) where x is a set. Python 3.11 removed set support "
+                   "in random.sample, so this raised TypeError('Population must be a "
+                   "sequence') on every EBPR/UBPR/UEBPR fit under Python >=3.11 — the entire "
+                   "Tier 1 EBPR family produced zero results and was silently recorded as "
+                   "`crashed` failure rows. Fix: random.sample(sorted(x), 100), which also "
+                   "makes the negative sampling deterministic given the seed rather than "
+                   "dependent on set iteration order.",
+        "reference": "found in the smoke run's failures.parquet (8 crashes per EBPR variant)",
+    },
+    {
+        "target": "external/ebpr/Code/data.py (create_explainability_matrix / "
+                   "create_popularity_vector / create_neighborhood, 3 branches)",
+        "change": "the `include_test=True` branches indexed the crosstab with "
+                   "list(range(num_items)) without padding items absent from the frame, "
+                   "raising KeyError('[...] not in index'). The sibling branch 20 lines "
+                   "above already pads missing columns/rows; these three were never given "
+                   "the same treatment. Fix: apply the identical padding.",
+        "reference": "surfaced once the random.sample crash above was fixed",
+    },
+    {
+        "target": "external/ebpr/Code/data.py (create_explainability_matrix, 4 np.save calls)",
+        "change": "dumped interaction_matrix, item_similarity_matrix, neighborhood and "
+                   "explainability_matrix to Output/results/ on every call. Nothing reads "
+                   "them back (no np.load anywhere in the EBPR codebase or rexbench) and all "
+                   "four are returned in memory on the next line, so the writes were dead "
+                   "I/O costing ~587 GB across a full run — a disk blocker on rented "
+                   "hardware. Removed. Cannot affect results: the returned values are "
+                   "byte-identical.",
+        "reference": "measured per-dataset; electronics alone wrote 17.9 GB per fit",
+    },
+    {
         "target": "baselines/explanation-quality-recsys/models/PGPR/data_utils.py "
                    "(generate_review_dict, rating/timestamp parsing)",
         "change": "both `rating` and `timestamp` were gated on `dataset_name == 'ml1m'`, "

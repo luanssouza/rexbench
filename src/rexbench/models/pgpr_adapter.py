@@ -297,7 +297,21 @@ class PGPRModelAdapter(ModelAdapter):
 
         rows = []
         for uid in users:
-            ranked = sorted(by_user.get(uid, []), key=lambda t: -t[0])[:k]
+            # FIXED: de-duplicate by item before truncating to k. PGPR yields one entry per
+            # predicted PATH, and several paths routinely end at the same item, so the raw
+            # list repeated items across ranks: a top-5 could be [42, 42, 42, 7, 7] — two
+            # distinct items filling five slots. Every other adapter returns k distinct
+            # items (they top-k over a score vector), so leaving the duplicates in both gave
+            # PGPR's users fewer real options and corrupted the item-side metrics, which
+            # count occurrences: item_coverage/entropy/item_exposure_gini would all treat the
+            # same recommendation as several. Keeping the highest-probability path per item
+            # preserves PGPR's own ranking and its explanation for that item.
+            best_by_item: dict[int, tuple[float, int, list]] = {}
+            for prob, item_id, path in by_user.get(uid, []):
+                current = best_by_item.get(item_id)
+                if current is None or prob > current[0]:
+                    best_by_item[item_id] = (prob, item_id, path)
+            ranked = sorted(best_by_item.values(), key=lambda t: -t[0])[:k]
             for rank, (prob, item_id, _path) in enumerate(ranked, start=1):
                 rows.append({"user_id": uid, "item_id": item_id, "rank": rank, "score": float(prob)})
         return pd.DataFrame(rows, columns=["user_id", "item_id", "rank", "score"])

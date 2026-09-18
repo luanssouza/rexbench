@@ -69,6 +69,8 @@ class EBPRModelAdapter(ModelAdapter):
         self.variant = config.variant  # "BPR" | "UBPR" | "EBPR" | "pUEBPR" | "UEBPR"
         self._engine = None
         self._num_items = None
+        self._best_epoch = None
+        self._best_val_ndcg = None
 
     def check_preconditions(self, dataset: DatasetBundle) -> PreconditionReport:
         required = self.config.precondition_for(dataset.name).min_fraction_users_with_2plus
@@ -129,6 +131,16 @@ class EBPRModelAdapter(ModelAdapter):
             # fit()'s actual evaluate()/save_implicit() call below.
             "loo_eval": hp.get("loo_eval", True),
             "neighborhood": hp.get("neighborhood", 20),
+            # How often to run the per-epoch validation pass that selects the best model.
+            # 1 = every epoch (the original behaviour, and the default so nothing changes
+            # unless a config opts in). Higher values trade selection granularity for time:
+            # Engine.evaluate() is a full leave-one-out pass with 100 sampled negatives per
+            # user and dominates total runtime, so eval_every=5 over 50 epochs cuts it from
+            # 50 passes to 11. The best model is then chosen among the epochs actually
+            # evaluated -- it can miss a short-lived peak between checkpoints, which is the
+            # whole trade. The final epoch is ALWAYS evaluated regardless (see fit()), so
+            # the fully-trained model is never excluded from the candidates.
+            "eval_every": max(1, int(hp.get("eval_every", 1))),
             "model_dir_explicit": "Output/checkpoints/{}_Epoch{}_MAP@{}_{:.4f}_NDCG@{}_{:.4f}_MEP@{}_{:.4f}_WMEP@{}_{:.4f}_Avg_Pop@{}_{:.4f}_EFD@{}_{:.4f}_Avg_Pair_Sim@{}_{:.4f}.model",
             "model_dir_implicit": "Output/checkpoints/{}_Epoch{}_NDCG@{}_{:.4f}_HR@{}_{:.4f}_MEP@{}_{:.4f}_WMEP@{}_{:.4f}_Avg_Pop@{}_{:.4f}_EFD@{}_{:.4f}_Avg_Pair_Sim@{}_{:.4f}.model",
         }
@@ -137,18 +149,31 @@ class EBPRModelAdapter(ModelAdapter):
         config = self._build_config(dataset, seed, device)
         self._num_items = dataset.num_items
 
+        # EBPR's per-epoch evaluate()/save_implicit() pick the best epoch. Feeding
+        # dataset.test here would select the model on the very split rexbench later reports
+        # on -- test-set leakage that inflates every reported number. dataset.val is fed
+        # instead, so EBPR's internal "test" set is our VALIDATION set and the real test
+        # split never enters the training loop at all; rexbench scores it afterwards via
+        # recommend(). This also stops dataset.val from being silently discarded, which is
+        # what left items missing from the crosstab and caused the KeyError padding bug.
+        #
+        # split_val stays False on purpose: with a `test` column present, SampleGenerator's
+        # _split_loo honours it verbatim (train = test==0, held-out = test==1) and does NOT
+        # re-split internally. Passing split_val=True would make EBPR carve its own val out
+        # of train, breaking the "same split for every model" contract -- the same class of
+        # bug already fixed for RecBole.
+        selection_split = dataset.val if len(dataset.val) else dataset.test
         ratings = pd.concat(
-            [dataset.train.assign(test=0), dataset.test.assign(test=1)], ignore_index=True
+            [dataset.train.assign(test=0), selection_split.assign(test=1)], ignore_index=True
         ).rename(columns={"user_id": "userId", "item_id": "itemId"})[
             ["userId", "itemId", "rating", "timestamp", "test"]
         ]
 
-        # BUGFIX: Code/data.py np.save()s four matrices into Output/results/, but the
-        # submodule only ships Output/checkpoints/ -- so every fit died with
-        # FileNotFoundError on a fresh clone. (In the smoke test this was masked: the
-        # random.sample crash happened first.) Creating the directory is the minimal fix;
-        # see README's "EBPR writes 587 GB of unused matrices" note for the cost this
-        # implies and how to switch it off.
+        # Code/data.py used to np.save() four matrices into Output/results/ on every call,
+        # which both crashed on a fresh clone (the submodule only ships Output/checkpoints/)
+        # and wrote ~587 GB across a full run. Those writes are now removed upstream in the
+        # fork -- see core/determinism.py's DISCLOSED_CORRECTIONS. This mkdir is kept as
+        # cheap insurance for any other relative path the vendored code may expect.
         (EBPR_ROOT / "Output" / "results").mkdir(parents=True, exist_ok=True)
         with _chdir(EBPR_ROOT):
             sample_generator = SampleGenerator(ratings, config, split_val=False)
@@ -163,17 +188,34 @@ class EBPRModelAdapter(ModelAdapter):
             engine = BPREngine(config)
             best_performance = [0] * 8
             best_model = ""
+            eval_every = config["eval_every"]
+            last_epoch = config["num_epoch"] - 1
             for epoch in range(config["num_epoch"]):
                 train_loader = sample_generator.train_data_loader(config["batch_size"])
                 engine.train_an_epoch(train_loader, explainability_matrix, popularity_vector, neighborhood, epoch_id=epoch)
+                # The last epoch is always evaluated: save_implicit only writes the
+                # checkpoint on epoch == num_epoch - 1, and the fully-trained model must
+                # stay a candidate for "best" no matter how eval_every falls.
+                if epoch % eval_every and epoch != last_epoch:
+                    continue
                 ndcg, hr, mep, wmep, avg_pop, efd, avg_pair_sim = engine.evaluate(
                     test_data, test_explainability_matrix, test_popularity_vector,
-                    test_item_similarity_matrix, epoch_id=str(epoch) + " on test data",
+                    test_item_similarity_matrix, epoch_id=str(epoch) + " on validation data",
                 )
                 best_model, best_performance = engine.save_implicit(
                     epoch, ndcg, hr, mep, wmep, avg_pop, efd, avg_pair_sim,
                     config["num_epoch"], best_model, best_performance, save_models=True,
                 )
+
+            # Use the BEST epoch's weights, not the last epoch's. save_implicit tracks the
+            # best epoch by validation NDCG; before the engine_EBPR.py deepcopy fix it
+            # handed back a reference to the live (final-epoch) model, so this swap would
+            # have been a no-op. recommend() reads self._engine.model, so pointing the
+            # engine at the snapshot is all that is needed.
+            if isinstance(best_model, torch.nn.Module):
+                engine.model = best_model
+                self._best_epoch = best_performance[7]
+                self._best_val_ndcg = best_performance[0]
 
         self._engine = engine
 

@@ -1,3 +1,5 @@
+import pytest
+
 from rexbench.config.schema import ModelConfig, PreconditionConfig
 from rexbench.core.dataset import InteractionStats
 from rexbench.models.ebpr_adapter import EBPRModelAdapter
@@ -26,7 +28,8 @@ def test_ebpr_precondition_fails_on_sparse_data():
     adapter = _ebpr_adapter(min_fraction_users_with_2plus=0.5)
     report = adapter.check_preconditions(_FakeBundle(fraction_users_lt_2=0.9))
     assert not report.satisfied
-    assert report.measurements["fraction_users_with_2plus_interactions"] == 0.1
+    # 1 - 0.9 is 0.09999999999999998 in IEEE 754, so this needs approx, not ==.
+    assert report.measurements["fraction_users_with_2plus_interactions"] == pytest.approx(0.1)
     assert report.requirement == {"min_fraction_users_with_2plus": 0.5}
     assert report.reason is not None
 

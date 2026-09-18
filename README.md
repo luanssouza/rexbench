@@ -349,6 +349,89 @@ while still keeping 96% of interactions. Changing EBPR's dense matrices to a chu
 sparse top-N neighbourhood would remove the quadratic term entirely, but that means editing
 vendored method code and is not done here.
 
+## EBPR: best-model selection and `eval_every`
+
+Two corrections and one new knob, all in the same area.
+
+**The best model was never actually used.** `Engine.save_implicit` did
+`best_model = self.model` — a *reference* to the live model, which training keeps mutating in
+place. So `best_model` always ended up holding the final epoch's weights, and
+`save_checkpoint(best_model, ...)` wrote the final epoch to disk under the best epoch's
+filename, while `best_performance` reported the best epoch's metrics. The saved model and its
+reported score disagreed. Fixed with `copy.deepcopy(self.model)` (the model is two embedding
+tables, ~1 MB even for lastfm1k). `EBPRModelAdapter.fit()` now points the engine at that
+snapshot, so `recommend()` scores with the best epoch's weights.
+
+**Selection moved off the test split.** The per-epoch pass evaluated against `dataset.test` —
+selecting the model on the very split rexbench then reports on, which inflates every number.
+It now evaluates against `dataset.val`, so the test split never enters the training loop.
+This also gives `dataset.val` a purpose; it was previously discarded, which is what left
+items missing from the crosstab and produced the `KeyError` padding bug. `split_val` stays
+`False` deliberately: with a `test` column present, `SampleGenerator._split_loo` honours it
+verbatim, whereas `split_val=True` would make EBPR carve its own validation set out of train
+and break the "same split for every model" contract.
+
+**`eval_every` (new hyperparameter, default 1).** `Engine.evaluate()` is a full
+leave-one-out pass with 100 sampled negatives per user and dominates EBPR's runtime. Since it
+is what selects the best model it cannot simply be removed, but it can run less often:
+
+| `eval_every` | passes over 50 epochs |
+|---|---|
+| 1 (default, original behaviour) | 50 |
+| 5 (`configs/*` full-scale) | 11 |
+| 10 | 6 |
+
+The first and last epochs are always evaluated, so the fully-trained model is never excluded
+from the candidates and `save_implicit`'s checkpoint write still fires. The trade is
+granularity: a short-lived peak between two evaluated epochs can be missed. Note that
+`dataset_overrides` replace the whole `hyperparameters` dict rather than merging it, so an
+override that omits `eval_every` silently falls back to 1 — there is a test for that.
+
+## Evaluation protocol: what every model shares
+
+All reported metrics come from one path, identical for every algorithm:
+`runner.py` calls `model.recommend(users, k)` and scores the result against
+`dataset.user_test_dict()` through `metrics/dispatch.py`. No model computes its own reported
+numbers — EBPR's internal `evaluate()` only picks which epoch's checkpoint to keep.
+
+Three defects broke that premise and were fixed in this pass. All three change reported
+values, so **results from before this fix are not comparable**.
+
+**1. The evaluated population depended on the model.** `dataset_ndcg_k`/`map_at_k` skipped any
+user whose list had fewer than `k` entries. Models that always return `k` items (EBPR,
+RecBole) were scored on every user, while PGPR — whose candidates come from predicted paths
+and can be short — had exactly those users dropped from its own average. Dropping them is not
+neutral: the users a path-based model fails to reach are its hard cases. Demonstrated on a toy
+frame: a model that found the relevant item for all 5 users but returned short lists for 3 of
+them was averaged over 2. Now every user in the ground truth is scored; a short or empty list
+simply scores lower. AUDIT.md had flagged this; it was preserved until now.
+
+**2. NDCG was normalised by the hits found, not by the ideal.** The ideal ranking was
+`sorted(r, reverse=True)` — the hits actually retrieved, pushed to the top — instead of
+`min(|relevant|, k)` relevant items. That normalises recall away completely: a user with 20
+relevant items who got 2 of them, both at ranks 1–2, scored **1.0** instead of 0.359
+(measured). Any list whose hits sat at the top scored a perfect 1.0 regardless of how many
+relevant items were missed, so the metric could not separate a model that finds everything
+from one that finds almost nothing. `map_at_k` always normalised by `min(|relevant|, k)`, so
+NDCG and MAP were not even consistent with each other. `gini` and `variance` are computed over
+these per-user NDCG values and inherited the distortion.
+
+**3. PGPR returned duplicate items.** It yields one entry per predicted *path*, and several
+paths routinely end at the same item, so a top-5 could be `[42, 42, 42, 7, 7]` — two distinct
+items filling five slots. Every other adapter returns `k` distinct items. Besides giving those
+users fewer real options, it corrupted the item-side metrics, which count occurrences:
+`item_coverage`, `entropy` and `item_exposure_gini` all treated one recommendation as several.
+Now de-duplicated by item, keeping the highest-probability path (which also keeps that item's
+explanation).
+
+**Deliberately consistent, not a defect:** no adapter masks the user's training history out of
+the candidate set, so all three may recommend already-seen items. That is the same rule for
+every model. If you want held-out-only candidates, it has to change in all three at once.
+
+**Still asymmetric, and not yet resolved:** PGPR trains on `train + val` (it has no validation
+concept), while EBPR and RecBole train on `train` alone. PGPR therefore sees ~10% more
+interactions than the others. Flag this in any head-to-head table until it is reconciled.
+
 ## Implemented metrics
 
 Every metric below is selectable per-run from a config's `metrics:` block (`accuracy`,
@@ -456,11 +539,15 @@ any model's config declares one — see Hyperparameter optimization above).
 
 ## Verification status
 
-Run without the merged environment installed:
+In the full merged environment (torch present) the whole suite runs:
+```bash
+PYTHONPATH=src python3 -m pytest tests/ -q          # 174 passed
+```
+Without torch installed, the adapter-level tests skip and the rest still run:
 ```bash
 PYTHONPATH=src python3 -m pytest tests/test_config_schema.py tests/test_metrics_validate.py tests/test_dataset_bundle.py tests/test_hpo.py tests/test_significance.py tests/test_item_side_fairness.py tests/test_kcore_filter.py -v
 ```
-103/103 passing — covers the config schema (including all three real configs, the per-dataset
+103/103 passing there; 174/174 — covers the config schema (including all three real configs, the per-dataset
 `dataset_overrides` mechanism, and `HPOConfig`/`HPOParamSpec` validation), the dataset/split/
 tail-item logic (dependency-free after absorbing the predecessor pipeline's loaders —
 `core/dataset.py` no longer needs RecBole just to import), the HPO grid/random sampling

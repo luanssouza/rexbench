@@ -220,3 +220,34 @@ def test_ebpr_bpr_does_not_collide_with_recbole_bpr(path):
     by_name = {m.name: m for m in config.models}
     assert by_name["BPR_ebpr"].adapter == "ebpr"
     assert by_name["BPR"].adapter == "recbole"
+
+
+# ------------------------------------------------------------------ eval_every consistency
+
+@pytest.mark.parametrize("path", ALL_CONFIGS)
+def test_ebpr_configs_set_eval_every_everywhere_including_overrides(path):
+    """dataset_overrides replace the whole hyperparameters dict rather than merging, so an
+    override that forgets eval_every silently falls back to 1 (evaluate every epoch) and
+    quietly costs hours on exactly the datasets that needed an override in the first place."""
+    config = _load(path)
+    for model in config.models:
+        if model.adapter != "ebpr":
+            continue
+        assert "eval_every" in model.hyperparameters, f"{path}:{model.name}"
+        for ds_name, override in model.dataset_overrides.items():
+            if override.hyperparameters is None:
+                continue
+            assert "eval_every" in override.hyperparameters, f"{path}:{model.name}:{ds_name}"
+
+
+@pytest.mark.parametrize("path", ALL_CONFIGS)
+def test_eval_every_never_exceeds_num_epoch_pointlessly(path):
+    """eval_every > num_epoch degenerates to "first and last epoch only"; flag it if a
+    config drifts into that by accident."""
+    for model in _load(path).models:
+        if model.adapter != "ebpr":
+            continue
+        for hp in [model.hyperparameters] + [
+            o.hyperparameters for o in model.dataset_overrides.values() if o.hyperparameters
+        ]:
+            assert hp["eval_every"] <= hp["num_epoch"], f"{path}:{model.name}"

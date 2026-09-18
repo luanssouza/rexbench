@@ -29,10 +29,29 @@ def dcg_at_k(r: Sequence, k: int, method: int = 1) -> float:
 
 
 @validated_range(0.0, 1.0)
-def ndcg_at_k(r: Sequence, k: int, method: int = 0) -> float:
+def ndcg_at_k(r: Sequence, k: int, method: int = 0, n_relevant: int | None = None) -> float:
     """NDCG@k. Jarvelin & Kekalainen (2002), "Cumulated Gain-based Evaluation of IR
-    Techniques", ACM TOIS 20(4):422-446. https://doi.org/10.1145/582415.582418"""
-    dcg_max = dcg_at_k(sorted(r, reverse=True), k, method)
+    Techniques", ACM TOIS 20(4):422-446. https://doi.org/10.1145/582415.582418
+
+    FIXED: the ideal ranking is now `min(n_relevant, k)` relevant items, per the definition
+    above. It used to be `sorted(r, reverse=True)` — the hits actually *found*, pushed to the
+    top — which normalises away recall entirely: a user with 20 relevant items who got 2 of
+    them, both at ranks 1-2, scored **1.0** instead of 0.359 (measured). Any list whose hits
+    happen to sit at the top scored a perfect 1.0 no matter how many relevant items were
+    missed, so the metric could not distinguish a model that finds everything from one that
+    finds almost nothing. gini/variance are computed over these per-user values and inherited
+    the distortion. `map_at_k` below always normalised by `min(len(rel_set), k)`, so NDCG and
+    MAP were not even consistent with each other.
+
+    n_relevant=None keeps the old hits-only normalisation, for callers that genuinely have no
+    ground-truth size (no caller in rexbench does — dataset_ndcg_k always passes it).
+    """
+    if n_relevant is None:
+        ideal = sorted(r, reverse=True)
+    else:
+        n_ideal = min(int(n_relevant), k)
+        ideal = [1] * n_ideal + [0] * max(0, k - n_ideal)
+    dcg_max = dcg_at_k(ideal, k, method)
     if not dcg_max:
         return 0.0
     return dcg_at_k(r, k, method) / dcg_max
@@ -51,17 +70,26 @@ def _topk_per_user(predictions_df: pd.DataFrame, uid, top_k: int, groups) -> lis
 
 
 def dataset_ndcg_k(predictions_df: pd.DataFrame, user_test_dict: Dict, top_k: int = 10) -> Dict:
-    """Per-user NDCG@k. Users whose top-k list has fewer than top_k entries are skipped
-    (matches the predecessor pipeline's original behavior — flagged in AUDIT.md as silently shrinking the
-    evaluated population on sparse data/models, preserved here rather than changed)."""
+    """Per-user NDCG@k over EVERY user in the ground truth.
+
+    FIXED: users whose list had fewer than top_k entries used to be skipped. That made the
+    evaluated population model-dependent, which breaks the premise that every algorithm is
+    compared on the same scenario: models that always return k items (EBPR, RecBole) were
+    scored on all users, while a model that returns short lists for some users (PGPR, whose
+    candidates come from predicted paths) had exactly those users silently dropped from its
+    average — and dropping users is not neutral, since the ones a path-based model fails to
+    reach are precisely its hard cases. Demonstrated: a model that found the relevant item
+    for all 5 users but returned short lists for 3 of them was averaged over 2 users.
+
+    Now a short or empty list simply scores lower, which is the honest outcome. AUDIT.md
+    flagged the old behaviour; it was preserved until this pass and is now corrected.
+    """
     groups = predictions_df.groupby(U_COL)
     out: Dict = {}
     for uid, rel_set in user_test_dict.items():
         topk = _topk_per_user(predictions_df, uid, top_k, groups)
-        if len(topk) < top_k:
-            continue
         hit_list = [1 if int(pid) in rel_set else 0 for pid in topk]
-        out[uid] = ndcg_at_k(hit_list, top_k)
+        out[uid] = ndcg_at_k(hit_list, top_k, n_relevant=len(rel_set))
     return out
 
 
@@ -89,8 +117,7 @@ def map_at_k(predictions_df: pd.DataFrame, user_test_dict: Dict, top_k: int = 10
     ap_scores = []
     for uid, rel_items in user_test_dict.items():
         topk = _topk_per_user(predictions_df, uid, top_k, groups)
-        if len(topk) < top_k:
-            continue
+        # No skip: same evaluated population as dataset_ndcg_k above, for the same reason.
         ap_scores.append(ap_at_k(topk, set(rel_items), top_k))
     return sum(ap_scores) / len(ap_scores) if ap_scores else 0.0
 

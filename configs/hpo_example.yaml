@@ -94,6 +94,7 @@ models:
     applies_to: all_datasets
     hyperparameters:
       num_epoch: 50
+      eval_every: 5
       batch_size: 512
       lr: 0.001
       num_latent: 8
@@ -119,7 +120,7 @@ models:
       # unrestricted [5,10,20,30] range above would waste trials on neighborhood sizes the
       # sparse-dataset session already found to be too diluted).
       electronics:
-        hyperparameters: {num_epoch: 50, batch_size: 512, lr: 0.001, num_latent: 8, neighborhood: 5, optimizer: adam}
+        hyperparameters: {num_epoch: 50, batch_size: 512, lr: 0.001, num_latent: 8, neighborhood: 5, optimizer: adam, eval_every: 5}
         precondition: {min_fraction_users_with_2plus: 0.05}
         hpo:
           strategy: random
@@ -133,7 +134,7 @@ models:
             num_latent: {type: choice, values: [4, 8, 16, 32]}
             neighborhood: {type: choice, values: [2, 3, 5]}
       rentrunway:
-        hyperparameters: {num_epoch: 50, batch_size: 512, lr: 0.001, num_latent: 8, neighborhood: 5, optimizer: adam}
+        hyperparameters: {num_epoch: 50, batch_size: 512, lr: 0.001, num_latent: 8, neighborhood: 5, optimizer: adam, eval_every: 5}
         precondition: {min_fraction_users_with_2plus: 0.05}
         hpo:
           strategy: random
@@ -147,7 +148,7 @@ models:
             num_latent: {type: choice, values: [4, 8, 16, 32]}
             neighborhood: {type: choice, values: [2, 3, 5]}
       amazon_digital_music:
-        hyperparameters: {num_epoch: 50, batch_size: 512, lr: 0.001, num_latent: 8, neighborhood: 5, optimizer: adam}
+        hyperparameters: {num_epoch: 50, batch_size: 512, lr: 0.001, num_latent: 8, neighborhood: 5, optimizer: adam, eval_every: 5}
         precondition: {min_fraction_users_with_2plus: 0.05}
         hpo:
           strategy: random
@@ -168,6 +169,7 @@ models:
     applies_to: all_datasets
     hyperparameters:
       num_epoch: 50
+      eval_every: 5
       batch_size: 512
       lr: 0.001
       num_latent: 8
@@ -183,6 +185,7 @@ models:
     applies_to: all_datasets
     hyperparameters:
       num_epoch: 50
+      eval_every: 5
       batch_size: 512
       lr: 0.001
       num_latent: 8

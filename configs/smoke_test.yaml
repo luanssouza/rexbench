@@ -107,17 +107,17 @@ models:
     adapter: ebpr
     variant: EBPR
     applies_to: all_datasets
-    hyperparameters: {num_epoch: 2, batch_size: 32, lr: 0.001, num_latent: 4, neighborhood: 5, optimizer: adam}
+    hyperparameters: {num_epoch: 2, batch_size: 32, lr: 0.001, num_latent: 4, neighborhood: 5, optimizer: adam, eval_every: 1}
     precondition: {min_fraction_users_with_2plus: 0.5}
     dataset_overrides: &sparse_ebpr_overrides
       electronics:
-        hyperparameters: {num_epoch: 2, batch_size: 32, lr: 0.001, num_latent: 4, neighborhood: 3, optimizer: adam}
+        hyperparameters: {num_epoch: 2, batch_size: 32, lr: 0.001, num_latent: 4, neighborhood: 3, optimizer: adam, eval_every: 1}
         precondition: {min_fraction_users_with_2plus: 0.05}
       rentrunway:
-        hyperparameters: {num_epoch: 2, batch_size: 32, lr: 0.001, num_latent: 4, neighborhood: 3, optimizer: adam}
+        hyperparameters: {num_epoch: 2, batch_size: 32, lr: 0.001, num_latent: 4, neighborhood: 3, optimizer: adam, eval_every: 1}
         precondition: {min_fraction_users_with_2plus: 0.05}
       amazon_digital_music:
-        hyperparameters: {num_epoch: 2, batch_size: 32, lr: 0.001, num_latent: 4, neighborhood: 3, optimizer: adam}
+        hyperparameters: {num_epoch: 2, batch_size: 32, lr: 0.001, num_latent: 4, neighborhood: 3, optimizer: adam, eval_every: 1}
         precondition: {min_fraction_users_with_2plus: 0.05}
 
   - name: UBPR
@@ -125,7 +125,7 @@ models:
     adapter: ebpr
     variant: UBPR
     applies_to: all_datasets
-    hyperparameters: {num_epoch: 2, batch_size: 32, lr: 0.001, num_latent: 4, neighborhood: 5, optimizer: adam}
+    hyperparameters: {num_epoch: 2, batch_size: 32, lr: 0.001, num_latent: 4, neighborhood: 5, optimizer: adam, eval_every: 1}
     precondition: {min_fraction_users_with_2plus: 0.5}
     dataset_overrides: *sparse_ebpr_overrides
 
@@ -134,7 +134,7 @@ models:
     adapter: ebpr
     variant: UEBPR
     applies_to: all_datasets
-    hyperparameters: {num_epoch: 2, batch_size: 32, lr: 0.001, num_latent: 4, neighborhood: 5, optimizer: adam}
+    hyperparameters: {num_epoch: 2, batch_size: 32, lr: 0.001, num_latent: 4, neighborhood: 5, optimizer: adam, eval_every: 1}
     precondition: {min_fraction_users_with_2plus: 0.5}
     dataset_overrides: *sparse_ebpr_overrides
 

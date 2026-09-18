@@ -98,6 +98,7 @@ models:
     applies_to: all_datasets
     hyperparameters:
       num_epoch: 50
+      eval_every: 5
       batch_size: 512
       lr: 0.001
       num_latent: 8
@@ -106,10 +107,10 @@ models:
     precondition: {min_fraction_users_with_2plus: 0.5}
     dataset_overrides: &sparse_ebpr_overrides
       electronics:
-        hyperparameters: {num_epoch: 50, batch_size: 512, lr: 0.001, num_latent: 8, neighborhood: 5, optimizer: adam}
+        hyperparameters: {num_epoch: 50, batch_size: 512, lr: 0.001, num_latent: 8, neighborhood: 5, optimizer: adam, eval_every: 5}
         precondition: {min_fraction_users_with_2plus: 0.05}
       rentrunway:
-        hyperparameters: {num_epoch: 50, batch_size: 512, lr: 0.001, num_latent: 8, neighborhood: 5, optimizer: adam}
+        hyperparameters: {num_epoch: 50, batch_size: 512, lr: 0.001, num_latent: 8, neighborhood: 5, optimizer: adam, eval_every: 5}
         precondition: {min_fraction_users_with_2plus: 0.05}
 
   - name: UBPR
@@ -119,6 +120,7 @@ models:
     applies_to: all_datasets
     hyperparameters:
       num_epoch: 50
+      eval_every: 5
       batch_size: 512
       lr: 0.001
       num_latent: 8
@@ -134,6 +136,7 @@ models:
     applies_to: all_datasets
     hyperparameters:
       num_epoch: 50
+      eval_every: 5
       batch_size: 512
       lr: 0.001
       num_latent: 8
